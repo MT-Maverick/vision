@@ -3,15 +3,18 @@ vision LLM (served by Ollama) names it or describes what is happening."""
 import asyncio
 import base64
 import binascii
+import ipaddress
 import json
 import logging
 import os
+import re
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 try:  # optional: server-side downscaling. The browser already resizes frames.
@@ -24,10 +27,12 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s")
 log = logging.getLogger("vision")
 
 BASE_DIR = Path(__file__).resolve().parent
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434").rstrip("/")
-# qwen3:8b is text-only, so it cannot read images. qwen2.5vl:3b and gemma3 can.
-MODEL = os.getenv("VISION_MODEL", "qwen2.5vl:3b")
-MAX_DIM = int(os.getenv("MAX_DIM", "512"))
+_ollama = os.getenv("OLLAMA_URL", "http://localhost:11434").rstrip("/")
+OLLAMA_URL = _ollama if _ollama.startswith(("http://", "https://")) else f"http://{_ollama}"
+# Must be a vision model (qwen3:8b is text-only). qwen3-vl:2b is light enough for a CPU.
+MODEL = os.getenv("VISION_MODEL", "qwen3-vl:2b")
+MAX_DIM = int(os.getenv("MAX_DIM", "768"))
+NUM_CTX = int(os.getenv("NUM_CTX", "4096"))
 MAX_FRAMES = 6
 MAX_FRAME_BYTES = 4_000_000
 TIMEOUT = float(os.getenv("INFERENCE_TIMEOUT", "300"))
@@ -35,6 +40,7 @@ TIMEOUT = float(os.getenv("INFERENCE_TIMEOUT", "300"))
 http: httpx.AsyncClient
 gpu_lock = asyncio.Lock()  # one inference at a time, extra phones queue up
 geo_cache: dict[tuple[float, float], str] = {}
+ip_geo_cache: dict = {}
 
 
 @asynccontextmanager
@@ -48,7 +54,15 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Vision Snapshot", version="2.0.0", lifespan=lifespan)
-app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
+class NoCacheStatic(StaticFiles):
+    """Always revalidate, so edits to the CSS/JS show up on a normal refresh."""
+    async def get_response(self, path, scope):
+        resp = await super().get_response(path, scope)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
+app.mount("/static", NoCacheStatic(directory=BASE_DIR / "static"), name="static")
 
 
 async def model_state() -> dict:
@@ -85,7 +99,8 @@ async def pre_warm_model():
     try:
         await http.post(f"{OLLAMA_URL}/api/chat", timeout=180.0, json={
             "model": MODEL, "messages": [{"role": "user", "content": "hi"}],
-            "stream": False, "keep_alive": "1h", "options": {"num_predict": 1},
+            "stream": False, "keep_alive": "24h", "think": False,
+            "options": {"num_predict": 1, "num_ctx": NUM_CTX},
         })
         log.info("Model ready.")
     except Exception as e:
@@ -94,12 +109,46 @@ async def pre_warm_model():
 
 @app.get("/")
 async def index():
-    return FileResponse(BASE_DIR / "index.html")
+    return FileResponse(BASE_DIR / "index.html", headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/api/status")
 async def status():
     return await model_state()
+
+
+@app.get("/healthz")
+async def healthz():
+    return {"ok": True}
+
+
+def visitor_ip(request: Request) -> str:
+    fwd = request.headers.get("x-forwarded-for", "")
+    return fwd.split(",")[0].strip() if fwd else (request.client.host if request.client else "")
+
+
+@app.get("/api/ip-location")
+async def ip_location(request: Request):
+    """City-level location from the visitor's public IP, used when the browser
+    cannot get a GPS or Wi-Fi fix. On a LAN the visitor's IP is private, so we
+    look up this server's own public IP instead (same network, same city)."""
+    ip = visitor_ip(request)
+    try:
+        target = ip if ipaddress.ip_address(ip).is_global else ""
+    except ValueError:
+        target = ""
+    hit = ip_geo_cache.get(target)
+    if hit and time.time() - hit["t"] < 3600:
+        return hit["v"]
+    try:
+        d = (await http.get(f"https://ipwho.is/{target}", timeout=5.0)).json()
+        if d.get("success"):
+            v = {"latitude": d["latitude"], "longitude": d["longitude"]}
+            ip_geo_cache[target] = {"v": v, "t": time.time()}
+            return v
+    except Exception as e:
+        log.info("IP location unavailable: %s", e)
+    return JSONResponse({"error": "unavailable"}, status_code=503)
 
 
 async def reverse_geocode(lat: float, lon: float) -> str:
@@ -179,16 +228,19 @@ async def ask_model(prompt: str, frames: list[str], mode: str) -> str:
         "model": MODEL,
         "messages": [{"role": "user", "content": prompt, "images": frames}],
         "stream": False,
-        "keep_alive": "1h",
+        "think": False,  # skip the reasoning phase: it is slow on CPU and would eat the short answer budget
+        "keep_alive": "24h",
         "options": {
             "temperature": 0.1,
-            "num_ctx": 8192,
-            "num_predict": 160 if mode == "describe" else 40,
+            "num_ctx": NUM_CTX,
+            "num_predict": {"describe": 160, "scout": 6}.get(mode, 40),
         },
     }
     r = await http.post(f"{OLLAMA_URL}/api/chat", json=payload, timeout=TIMEOUT)
     r.raise_for_status()
-    return r.json().get("message", {}).get("content", "").strip() or "Nothing recognised"
+    text = r.json().get("message", {}).get("content", "")
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()  # older Ollama may inline reasoning
+    return text or "Nothing recognised"
 
 
 def ollama_error(e: httpx.HTTPStatusError) -> str:
@@ -208,6 +260,42 @@ def parse_location(loc) -> tuple[float, float] | None:
     return None
 
 
+SCOUT_TARGETS = {
+    "person": "a person (face or body)",
+    "landmark": "a well-known landmark, monument, or notable building",
+}
+
+
+async def run_scout(ws: WebSocket, msg: dict):
+    """Cheap one-word check that Watch mode uses to decide whether a full analysis is worth running."""
+    rid = msg.get("id")
+    targets = [t for t in msg.get("targets", []) if t in SCOUT_TARGETS]
+    frames = prepare_frames(msg.get("images") or [])[:1]
+
+    async def out(status: str, hit=None):
+        await ws.send_json({"id": rid, "type": "scout", "status": status, "hit": hit})
+
+    if not frames or not targets or gpu_lock.locked():
+        return await out("skipped")
+    options = [t.upper() for t in targets] + ["NONE"]
+    prompt = (
+        "Look at this image. Is any of these clearly visible: "
+        + "; ".join(f"{t.upper()} = {SCOUT_TARGETS[t]}" for t in targets)
+        + f"? If several apply, pick the most prominent. Reply with exactly one word: {', '.join(options)}."
+    )
+    try:
+        async with gpu_lock:
+            text = (await ask_model(prompt, frames, "scout")).upper()
+        found = [(text.find(o), o) for o in options if o in text]
+        hit = min(found)[1].lower() if found else None
+        hit = hit if hit in targets else None
+        log.info("Scout: %s", hit or "nothing")
+        await out("success", hit)
+    except Exception as e:
+        log.info("Scout failed: %s", e)
+        await out("error")
+
+
 @app.websocket("/ws/vision")
 async def vision_websocket(ws: WebSocket):
     await ws.accept()
@@ -217,6 +305,9 @@ async def vision_websocket(ws: WebSocket):
             try:
                 msg = json.loads(await ws.receive_text())
             except json.JSONDecodeError:
+                continue
+            if msg.get("type") == "scout":
+                await run_scout(ws, msg)
                 continue
             rid = msg.get("id")
 

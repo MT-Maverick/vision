@@ -1,0 +1,9 @@
+# Render Blueprint. Deploy with: New > Blueprint > pick your repo.
+# Ollama and a ~2 GB vision model run inside this one service (CPU only).
+# The Pro plan (2 CPU, 4 GB RAM) is the smallest that fits the model comfortably.
+services:
+  - type: web
+    name: vision-snapshot
+    runtime: docker
+    plan: hobby
+    healthCheckPath: /healthz

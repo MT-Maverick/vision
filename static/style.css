@@ -1,0 +1,99 @@
+:root{
+  --ink:#0A1118; --mist:#EEF3F6; --dim:#A9BAC7; --focus:#F2C14E; --ok:#6FD3A8; --err:#FF9A8B;
+  --glass:rgba(20,32,43,.52); --edge:rgba(255,255,255,.15); color-scheme:dark;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+[hidden]{display:none!important}
+html,body{height:100%;background:var(--ink)}
+body{color:var(--mist);-webkit-tap-highlight-color:transparent;overscroll-behavior:none;
+  font:16px/1.4 "Avenir Next","Segoe UI",system-ui,sans-serif}
+button{font:inherit;color:inherit;cursor:pointer}
+:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+
+/* The camera is the whole screen; everything else floats on top of it. */
+.app{position:fixed;inset:0;overflow:hidden}
+#video,#still{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+#video.mirror{transform:scaleX(-1)}
+.shade{position:absolute;left:0;right:0;pointer-events:none}
+.shade.top{top:0;height:120px;background:linear-gradient(rgba(10,17,24,.45),transparent)}
+.shade.bottom{bottom:0;height:42%;background:linear-gradient(transparent,rgba(10,17,24,.6))}
+
+/* iOS-style "liquid glass": see-through, bright rim, soft depth */
+.glass,.chip{
+  background:linear-gradient(135deg,rgba(255,255,255,.26),rgba(255,255,255,.07) 55%,rgba(255,255,255,.15));
+  border:1px solid rgba(255,255,255,.32);
+  -webkit-backdrop-filter:blur(22px) saturate(1.9) brightness(1.08);
+  backdrop-filter:blur(22px) saturate(1.9) brightness(1.08);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.55),inset 0 -1px 0 rgba(255,255,255,.1),0 10px 30px rgba(0,0,0,.28);
+  text-shadow:0 1px 6px rgba(0,0,0,.4);
+}
+.glass{border-radius:26px}
+.chip{min-height:42px;padding:0 17px;border-radius:999px;color:#fff}
+.chip[aria-pressed=true]{background:linear-gradient(135deg,rgba(242,193,78,.45),rgba(242,193,78,.14));border-color:rgba(242,193,78,.85)}
+.chip[aria-expanded=true]{background:linear-gradient(135deg,rgba(255,255,255,.4),rgba(255,255,255,.14))}
+
+.reticle{position:absolute;inset:16% 12% 42%;pointer-events:none;transition:inset .45s ease}
+.reticle i{position:absolute;width:32px;height:32px;border:3px solid var(--focus);opacity:.9}
+.reticle i:nth-child(1){top:0;left:0;border-right:0;border-bottom:0;border-top-left-radius:10px}
+.reticle i:nth-child(2){top:0;right:0;border-left:0;border-bottom:0;border-top-right-radius:10px}
+.reticle i:nth-child(3){bottom:0;left:0;border-right:0;border-top:0;border-bottom-left-radius:10px}
+.reticle i:nth-child(4){bottom:0;right:0;border-left:0;border-top:0;border-bottom-right-radius:10px}
+.app.looking .reticle{inset:22% 20% 48%}
+
+.empty{position:absolute;inset:0;display:grid;place-content:center;justify-items:center;gap:14px;
+  padding:28px;text-align:center;background:var(--ink);color:var(--dim)}
+
+.top{position:absolute;top:0;left:0;right:0;display:flex;align-items:center;gap:8px;
+  padding:calc(env(safe-area-inset-top) + 12px) calc(env(safe-area-inset-right) + 14px) 0 calc(env(safe-area-inset-left) + 14px)}
+.top h1{font-size:1.02rem;font-weight:650;letter-spacing:.01em;margin-right:auto;text-shadow:0 1px 8px rgba(0,0,0,.5)}
+.conn{display:flex;align-items:center;gap:6px;font-size:.8rem;color:var(--dim)}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--err)}
+.dot.on{background:var(--ok)}
+
+.pill{position:absolute;left:50%;transform:translateX(-50%);padding:7px 16px;border-radius:20px;
+  top:calc(env(safe-area-inset-top) + 66px);font-size:.88rem;white-space:nowrap}
+
+.opts{position:absolute;display:grid;gap:10px;padding:14px;z-index:5;
+  top:calc(env(safe-area-inset-top) + 62px);left:14px;right:14px;max-width:400px;margin-left:auto}
+.label{font-size:.8rem;color:var(--dim);margin-bottom:-4px}
+.seg{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;background:rgba(255,255,255,.12);border-radius:12px;padding:3px}
+.seg button{min-height:40px;border:0;border-radius:10px;background:none;color:var(--dim)}
+.seg button[aria-pressed=true]{background:rgba(255,255,255,.18);color:var(--mist);font-weight:600}
+.field{display:grid;gap:6px;font-size:.8rem;color:var(--dim)}
+.field input{min-height:42px;border-radius:12px;border:1px solid var(--edge);background:rgba(255,255,255,.1);
+  color:var(--mist);padding:0 12px;font:inherit;font-size:1rem}
+.field input::placeholder{color:rgba(255,255,255,.4)}
+.pick{display:flex;align-items:center;justify-content:center;color:var(--dim)}
+.foot{font-size:.78rem;color:var(--dim)}
+
+.dock{position:absolute;left:0;right:0;bottom:0;display:grid;gap:10px;max-width:640px;margin:0 auto;
+  padding:0 calc(env(safe-area-inset-right) + 14px) calc(env(safe-area-inset-bottom) + 14px) calc(env(safe-area-inset-left) + 14px)}
+.readout{padding:14px 18px;min-height:3.8rem}
+.result{font-size:1.65rem;font-weight:650;line-height:1.2;overflow-wrap:anywhere}
+.result.long{font-size:1.08rem;font-weight:500;line-height:1.45}
+.result.idle{font-size:1rem;font-weight:400;color:var(--dim)}
+.result.error{color:var(--err);font-size:1rem;font-weight:500}
+.meta{margin-top:4px;font-size:.82rem;color:var(--dim)}
+.meta:empty{display:none}
+
+.controls{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;justify-items:center}
+.chip.round{min-width:78px}
+.shutter{width:80px;height:80px;border-radius:50%;border:4px solid var(--mist);background:rgba(255,255,255,.14);
+  -webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);box-shadow:0 8px 26px rgba(0,0,0,.35);
+  display:grid;place-items:center;transition:transform .12s}
+.shutter span{width:58px;height:58px;border-radius:50%;background:var(--focus);transition:transform .2s,opacity .2s}
+.shutter:active{transform:scale(.94)}
+.shutter.busy{pointer-events:none}
+.shutter.busy span{transform:scale(.55);opacity:.6}
+
+.history{list-style:none;display:flex;gap:8px;overflow-x:auto;padding:2px 0}
+.history button{display:block;width:54px;height:54px;padding:0;border:2px solid var(--edge);border-radius:12px;overflow:hidden;background:var(--glass)}
+.history button[aria-current=true]{border-color:var(--focus)}
+.history img{width:100%;height:100%;object-fit:cover;display:block}
+
+@media (min-width:900px){
+  .reticle{inset:14% 24% 36%}
+  .dock{max-width:560px}
+  .result{font-size:1.9rem}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
