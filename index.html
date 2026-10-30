@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#14202B">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="icon" type="image/x-icon" href="/static/favicon.ico">
+<title>Vision Snapshot</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <h1>Vision Snapshot</h1>
+    <span class="conn"><span class="dot" id="dot"></span>
+    <span id="conn">Connecting</span></span>
+    <button class="chip" id="loc" aria-pressed="false">Location off</button>
+  </header>
+
+  <main>
+    <section class="stage" id="stage" aria-label="Camera view">
+      <video id="video" autoplay playsinline muted></video>
+      <img id="still" alt="Photo you took" hidden>
+      <div class="reticle" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+      <div class="empty" id="empty" hidden>
+        <p id="emptyMsg"></p>
+        <button class="chip" id="retry">Try camera again</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="readout" aria-live="polite">
+        <p class="result" id="result">Point at something and press the shutter.</p>
+        <p class="meta" id="meta"></p>
+      </div>
+
+      <div class="seg" role="group" aria-label="Answer style">
+        <button data-group="mode" data-value="identify" aria-pressed="true">Name it</button>
+        <button data-group="mode" data-value="describe" aria-pressed="false">Describe it</button>
+      </div>
+      <div class="seg" role="group" aria-label="Frames">
+        <button data-group="frames" data-value="1" aria-pressed="true">One frame</button>
+        <button data-group="frames" data-value="4" aria-pressed="false">Burst of 4</button>
+      </div>
+
+      <div class="controls">
+        <button class="chip round" id="flip" aria-label="Switch camera">Flip</button>
+        <button class="shutter" id="shutter" aria-label="Analyze this view"><span></span></button>
+        <button class="chip round" id="auto" aria-pressed="false">Auto</button>
+      </div>
+      <label class="chip pick" id="pick">Take or choose a photo
+        <input type="file" id="file" accept="image/*" capture="environment" hidden>
+      </label>
+
+      <ol class="history" id="history" aria-label="Recent results"></ol>
+      <p class="foot" id="model"></p>
+    </section>
+  </main>
+</div>
+<script src="/static/script.js"></script>
+</body>
+</html>
