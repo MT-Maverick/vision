@@ -3,7 +3,7 @@
 # The Pro plan (2 CPU, 4 GB RAM) is the smallest that fits the model comfortably.
 services:
   - type: web
-    name: vision-snapshot
+    name: snapshot
     runtime: docker
     plan: hobby
     healthCheckPath: /healthz

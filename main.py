@@ -31,11 +31,28 @@ _ollama = os.getenv("OLLAMA_URL", "http://localhost:11434").rstrip("/")
 OLLAMA_URL = _ollama if _ollama.startswith(("http://", "https://")) else f"http://{_ollama}"
 # Must be a vision model (qwen3:8b is text-only). qwen3-vl:2b is light enough for a CPU.
 MODEL = os.getenv("VISION_MODEL", "qwen3-vl:2b")
-MAX_DIM = int(os.getenv("MAX_DIM", "768"))
 NUM_CTX = int(os.getenv("NUM_CTX", "4096"))
-MAX_FRAMES = 6
-MAX_FRAME_BYTES = 4_000_000
 TIMEOUT = float(os.getenv("INFERENCE_TIMEOUT", "300"))
+MAX_DIM = int(os.getenv("MAX_DIM", "512"))
+MAX_FRAMES = 6
+# Extra text-only model call that merges per-frame answers into one. Off by default:
+# each frame is sent to the client as soon as it is ready, and the final label lists them all.
+MERGE_FRAMES = os.getenv("MERGE_FRAMES", "0") == "1"
+MAX_FRAME_BYTES = 4_000_000
+
+# Sent as the first message of every request (warm-up included). Keep it identical
+# everywhere and always first: Ollama reuses the cached start of the prompt, so the
+# warm-up pre-computes it and later requests skip re-processing it.
+SYSTEM_PROMPT = (
+    "You are the vision component of a telemetry app. Phones and laptops send you "
+    "camera frames, and you report what is in them so the app can log and track it. "
+    "Be concise and factual. If something is unclear, say so instead of guessing. "
+    "Follow the output format asked for in each request exactly."
+)
+
+if cv2 is None:
+    log.warning("OpenCV is not installed: frames are NOT downscaled on the server, so large "
+                "images cost many more tokens. Install opencv-python-headless to enable MAX_DIM.")
 
 http: httpx.AsyncClient
 gpu_lock = asyncio.Lock()  # one inference at a time, extra phones queue up
@@ -53,7 +70,7 @@ async def lifespan(_: FastAPI):
     await http.aclose()
 
 
-app = FastAPI(title="Vision Snapshot", version="2.0.0", lifespan=lifespan)
+app = FastAPI(title="Vision Snapshot", version="1.3.0", lifespan=lifespan)
 class NoCacheStatic(StaticFiles):
     """Always revalidate, so edits to the CSS/JS show up on a normal refresh."""
     async def get_response(self, path, scope):
@@ -98,7 +115,11 @@ async def pre_warm_model():
     log.info("Loading '%s' into memory...", MODEL)
     try:
         await http.post(f"{OLLAMA_URL}/api/chat", timeout=180.0, json={
-            "model": MODEL, "messages": [{"role": "user", "content": "hi"}],
+            "model": MODEL,
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": "hi"},
+            ],
             "stream": False, "keep_alive": "24h", "think": False,
             "options": {"num_predict": 1, "num_ctx": NUM_CTX},
         })
@@ -209,34 +230,41 @@ def prepare_frames(images: list) -> list[str]:
     return out
 
 
-def build_prompt(mode: str, n_frames: int, place: str | None) -> str:
-    source = (f"These {n_frames} images are frames from one short camera clip, in order."
-              if n_frames > 1 else "This is a single photo from a camera.")
+def build_prompt(mode: str, n_frames: int, place: str | None, index: int | None = None) -> str:
+    if n_frames > 1 and index:
+        source = f"This is frame {index} of {n_frames} from one short camera clip, in order."
+    elif n_frames > 1:
+        source = f"These {n_frames} images are frames from one short camera clip, in order."
+    else:
+        source = "This is a single photo from a camera."
     where = f" It was taken near {place}." if place else ""
     if mode == "describe":
-        task = ("Describe what is happening in one or two short sentences. "
-                "Mention the main subject, what it is doing, and the setting. "
-                "Only state what is visible.")
+        task = ("Describe the object, person, animal, landmark, or activity happening in the frame, in one or two short sentences. "
+                "Mention the main subject, what it is doing, and the setting. ")
     else:
-        task = ("Identify the main object, person, animal, landmark, or activity. "
-                "Reply with only its name in 1 to 5 words, with no punctuation.")
+        task = ("Identify the main object, person, animal, landmark, or activity in the frame. "
+                "Reply with only the name in 1 to 5 words.")
     return f"{source}{where} {task}"
 
 
-async def ask_model(prompt: str, frames: list[str], mode: str) -> str:
+async def ask_model(prompt: str, frames: list[str], mode: str, timeout: float = TIMEOUT) -> str:
+    user_msg = {"role": "user", "content": prompt}
+    if frames:  # the combine step is text-only
+        user_msg["images"] = frames
     payload = {
         "model": MODEL,
-        "messages": [{"role": "user", "content": prompt, "images": frames}],
+        "messages": [{"role": "system", "content": SYSTEM_PROMPT}, user_msg],
         "stream": False,
         "think": False,  # skip the reasoning phase: it is slow on CPU and would eat the short answer budget
         "keep_alive": "24h",
         "options": {
             "temperature": 0.1,
             "num_ctx": NUM_CTX,
+            # Hard cap on generated tokens. Without it a text-only call can ramble until the timeout.
             "num_predict": {"describe": 160, "scout": 6}.get(mode, 40),
         },
     }
-    r = await http.post(f"{OLLAMA_URL}/api/chat", json=payload, timeout=TIMEOUT)
+    r = await http.post(f"{OLLAMA_URL}/api/chat", json=payload, timeout=timeout)
     r.raise_for_status()
     text = r.json().get("message", {}).get("content", "")
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()  # older Ollama may inline reasoning
@@ -248,6 +276,60 @@ def ollama_error(e: httpx.HTTPStatusError) -> str:
         return e.response.json().get("error", e.response.text)
     except Exception:
         return e.response.text
+
+
+def join_results(results: list[str]) -> str:
+    return " ".join(f"({i}) {t}" for i, t in enumerate(results, start=1))
+
+
+async def combine_results(mode: str, results: list[str]) -> str:
+    """Merges per-frame answers into one with a text-only call (no image tokens, so it is fast)."""
+    if mode != "describe" and len({r.strip().lower() for r in results}) == 1:
+        return results[0]  # every frame gave the same name, nothing to merge
+    numbered = "\n".join(f"Frame {i}: {t}" for i, t in enumerate(results, start=1))
+    if mode == "describe":
+        task = ("These are descriptions of consecutive frames from one short camera clip. "
+                "In one or two short sentences, describe what is happening overall.")
+    else:
+        task = ("These are names given to consecutive frames from one short camera clip. "
+                "Reply with only the single most fitting name, in 1 to 5 words.")
+    try:
+        async with gpu_lock:
+            return await ask_model(f"{task}\n{numbered}", [], mode, timeout=60.0)
+    except Exception as e:
+        log.warning("Combine step failed (%s), returning every frame instead", type(e).__name__)
+        return join_results(results)
+
+
+async def analyse_frames(mode: str, frames: list[str], place: str | None,
+                         progress=None, on_frame=None) -> tuple[str, list[str]]:
+    """Sends the frames to the model one request per image, so each call stays well under
+    INFERENCE_TIMEOUT, then merges the answers. The lock is taken per call, so other
+    clients can slot in between frames instead of waiting for a whole burst."""
+    results: list[str] = []
+    last_error: Exception | None = None
+    total = len(frames)
+    for i, frame in enumerate(frames, start=1):
+        if progress:
+            await progress(i, total)
+        try:
+            async with gpu_lock:
+                text = await ask_model(build_prompt(mode, total, place, i), [frame], mode)
+            results.append(text)
+            if on_frame:  # release this frame's answer now, don't wait for the rest
+                await on_frame(i, total, text)
+        except httpx.TimeoutException as e:  # skip a slow frame, keep the rest
+            log.warning("Frame %d/%d timed out", i, total)
+            last_error = e
+    if not results:
+        raise last_error or RuntimeError("No frame could be analysed")
+    if len(results) == 1:
+        label = results[0]
+    elif MERGE_FRAMES:
+        label = await combine_results(mode, results)
+    else:
+        label = join_results(results)
+    return label, results
 
 
 def parse_location(loc) -> tuple[float, float] | None:
@@ -327,10 +409,17 @@ async def vision_websocket(ws: WebSocket):
             await reply("working")
             log.info("%s: %d frame(s)%s", mode, len(frames), f" near {place}" if place else "")
             try:
-                async with gpu_lock:
-                    label = await ask_model(build_prompt(mode, len(frames), place), frames, mode)
+                async def progress(i: int, n: int):
+                    if n > 1:
+                        await reply("working", frame=i, frames=n)
+
+                async def on_frame(i: int, n: int, text: str):
+                    if n > 1:
+                        await reply("working", text, frame=i, frames=n, partial=True)
+
+                label, frame_labels = await analyse_frames(mode, frames, place, progress, on_frame)
                 log.info("Result: %s", label)
-                await reply("success", label, location_name=place,
+                await reply("success", label, location_name=place, frame_labels=frame_labels,
                             coords={"latitude": coords[0], "longitude": coords[1]} if coords else None)
             except httpx.ConnectError:
                 await reply("error", f"Cannot reach Ollama at {OLLAMA_URL}. Is it running?")

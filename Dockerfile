@@ -17,7 +17,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     OLLAMA_MAX_LOADED_MODELS=1 \
     VISION_MODEL=${MODEL} \
     MAX_DIM=768 \
-    NUM_CTX=4096 \
+    NUM_CTX=8192 \
     PORT=10000
 
 RUN apt-get update \
