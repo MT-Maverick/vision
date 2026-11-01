@@ -8,7 +8,6 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>Vision Snapshot</title>
 <link rel="stylesheet" href="/static/style.css?v=3">
-<link rel="shortcut icon" href="/static/favicon.ico" type="image/x-icon">
 </head>
 <body>
 <div class="app" id="stage">
@@ -32,10 +31,15 @@
   <div class="pill glass" id="pill" role="status" hidden></div>
 
   <section class="opts glass" id="opts" hidden aria-label="Options">
-    <div class="seg" role="group" aria-label="Answer style">
+    <div class="seg wrap" role="group" aria-label="Answer style">
       <button data-group="mode" data-value="identify" aria-pressed="true">Name it</button>
       <button data-group="mode" data-value="describe" aria-pressed="false">Describe it</button>
+      <button data-group="mode" data-value="narrate" aria-pressed="false">Narrator</button>
+      <button data-group="mode" data-value="story" aria-pressed="false">Mini story</button>
+      <button data-group="mode" data-value="funny" aria-pressed="false">Joke</button>
+      <button data-group="mode" data-value="funfact" aria-pressed="false">Fun fact</button>
     </div>
+    <button class="chip" id="speak" aria-pressed="false">Read answers aloud</button>
     <div class="seg" role="group" aria-label="Frames">
       <button data-group="frames" data-value="1" aria-pressed="true">One frame</button>
       <button data-group="frames" data-value="4" aria-pressed="false">Burst of 4</button>
@@ -57,8 +61,14 @@
   <footer class="dock">
     <ol class="history" id="history" aria-label="Recent results" hidden></ol>
     <div class="readout glass" aria-live="polite">
-      <p class="result idle" id="result">Point at something and press the shutter.</p>
+      <p class="result idle" id="result">Point at something and press the shutter, or ask a question below.</p>
       <p class="meta" id="meta"></p>
+      <button class="chip small" id="card" hidden>Save as card</button>
+      <div class="ask">
+        <input id="ask" type="text" maxlength="300" placeholder="Ask about this view…" enterkeyhint="send" autocomplete="off" aria-label="Ask a question about the view">
+        <button class="chip small" id="askBtn">Ask</button>
+      </div>
+      <button class="chip small" id="useLast" aria-pressed="false" hidden>Ask about the last photo instead</button>
     </div>
     <div class="controls">
       <button class="chip round" id="flip" aria-label="Switch camera">Flip</button>

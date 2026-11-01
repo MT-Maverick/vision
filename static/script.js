@@ -2,7 +2,7 @@
   const $ = (id) => document.getElementById(id);
 
   // Tunables
-  const SHOT_DIM = 1024, BURST_DIM = 768, SCOUT_DIM = 384, THUMB_DIM = 128; // image sizes sent to the model
+  const SHOT_DIM = 512, BURST_DIM = 512, SCOUT_DIM = 384, THUMB_DIM = 128; // image sizes sent to the model
   const BURST_GAP = 350, MAX_HISTORY = 12;
   const TICK_MS = 700;         // how often Watch samples the camera
   const CHANGE_THRESHOLD = 9;  // average pixel change (0-255) that counts as "the scene changed"
@@ -11,7 +11,7 @@
 
   const el = Object.fromEntries(
     ["stage","video","still","empty","emptyMsg","retry","dot","conn","pill","result","meta","shutter",
-     "flip","watch","loc","place","file","history","model","opts","optsBtn","tPerson","tLandmark"].map((k) => [k, $(k)]));
+     "flip","watch","loc","place","speak","card","ask","askBtn","useLast","file","history","model","opts","optsBtn","tPerson","tLandmark"].map((k) => [k, $(k)]));
   const opts = { mode: "identify", frames: 1 };
   const targets = { person: true, landmark: true };
 
@@ -20,6 +20,7 @@
   let ref = null, lastScoutAt = 0, holdUntil = 0, holdRef = null;
   let locOn = false, locError = 0, lastLoc = null, lastLocAt = 0, roughM = 0;
   const history = [];
+  let speakOn = false, shown = null;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const activeTargets = () => Object.keys(targets).filter((k) => targets[k]);
 
@@ -138,6 +139,8 @@
     el.result.textContent = text;
     el.result.className = "result " + (kind || (text.length > 40 ? "long" : ""));
     el.meta.textContent = meta;
+    el.card.hidden = !!kind || !shown;
+    el.useLast.hidden = !shown;
   }
   function setPill(text) {
     el.pill.textContent = text;
@@ -145,7 +148,7 @@
     el.stage.classList.toggle("looking", busy || scouting);
   }
 
-  async function send(images, thumb) {
+  async function send(images, thumb, question = "") {
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       show("Not connected to the server yet. Try again in a moment.", "error");
       setBusy(false);
@@ -154,21 +157,46 @@
     show("Looking…", "idle");
     const place = el.place.value.trim();
     const location = !place && locOn ? await getLoc() : null;
-    pending = { id: nextId++, thumb, gps: location ? location.accuracy : null };
-    ws.send(JSON.stringify({ id: pending.id, mode: opts.mode, images, location, place }));
+    pending = { id: nextId++, thumb, frame: images[0], question, mode: question ? "ask" : opts.mode, gps: location ? location.accuracy : null };
+    ws.send(JSON.stringify({ id: pending.id, mode: pending.mode, question, images, location, place }));
   }
 
-  async function analyze() {
-    if (busy || !cameraLive()) return;
-    setBusy(true);
+  async function captureFrames() {
     const dim = opts.frames > 1 ? BURST_DIM : SHOT_DIM;
-    const thumb = grab(THUMB_DIM, 0.7);
-    const images = [];
+    const thumb = grab(THUMB_DIM, 0.7), images = [];
     for (let i = 0; i < opts.frames; i++) {
       images.push(grab(dim));
       if (i < opts.frames - 1) await sleep(BURST_GAP);
     }
+    return { images, thumb };
+  }
+
+  async function analyze() {
+    if (busy || !cameraLive()) return;
+    window.speechSynthesis?.cancel();
+    setBusy(true);
+    const { images, thumb } = await captureFrames();
     send(images, thumb);
+  }
+
+  // Asks the model a typed question about the live view (or the last photo, if that chip is on).
+  async function askQuestion() {
+    const question = el.ask.value.trim();
+    if (!question || busy) return;
+    window.speechSynthesis?.cancel();
+    let images, thumb;
+    if (el.useLast.getAttribute("aria-pressed") === "true" && shown?.frame) {
+      images = [shown.frame]; thumb = shown.thumb;
+    } else if (!el.still.hidden) {
+      images = [el.still.src]; thumb = el.still.src;
+    } else if (!cameraLive()) {
+      show("The camera isn't running. Allow it, or take a photo in Options.", "error");
+      return;
+    }
+    setBusy(true);
+    if (!images) ({ images, thumb } = await captureFrames());
+    el.ask.value = "";
+    send(images, thumb, question);
   }
 
   function finish(m) {
@@ -178,9 +206,12 @@
     if (m.status === "success") {
       const when = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
       const acc = p.gps != null ? `±${fmtDist(p.gps)}` : "";
-      const meta = [m.location_name, acc, when].filter(Boolean).join(" · ");
+      const base = [m.location_name, acc, when].filter(Boolean).join(" · ");
+      const meta = p.question ? `Q: ${p.question} · ${base}` : base;
+      shown = { thumb: p.thumb, frame: p.frame, label: m.label, meta, base };
       show(m.label, "", meta);
-      history.unshift({ thumb: p.thumb, label: m.label, meta });
+      history.unshift(shown);
+      speak(m.label, p.mode);
       history.length = Math.min(history.length, MAX_HISTORY);
       renderHistory(0);
     } else {
@@ -240,6 +271,70 @@
     }
   }
 
+  /* ---------- voice and cards ---------- */
+  function speak(text, mode) {
+    if (!speakOn || !("speechSynthesis" in window)) return;
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    if (mode === "narrate") { u.rate = 0.88; u.pitch = 0.8; }
+    if (mode === "story") { u.rate = 0.92; u.pitch = 0.7; }
+    speechSynthesis.speak(u);
+  }
+
+  function wrapLines(ctx, text, maxW) {
+    const lines = [];
+    let line = "";
+    for (const w of text.split(/\s+/)) {
+      const t = line ? `${line} ${w}` : w;
+      if (ctx.measureText(t).width > maxW && line) { lines.push(line); line = w; } else line = t;
+    }
+    if (line) lines.push(line);
+    return lines;
+  }
+
+  // Draws the photo and its caption onto a card, then shares it (phones) or downloads it (computers).
+  async function saveCard() {
+    if (!shown) return;
+    const img = new Image();
+    img.src = shown.frame;
+    await img.decode();
+    const W = 1080, pad = 56, font = "600 46px system-ui, sans-serif";
+    const probe = document.createElement("canvas").getContext("2d");
+    probe.font = font;
+    const lines = wrapLines(probe, shown.label, W - pad * 2).slice(0, 9);
+    const photoH = Math.round((W - pad * 2) * img.height / img.width);
+    const H = pad + photoH + 48 + lines.length * 62 + 110;
+    const cv = document.createElement("canvas");
+    cv.width = W; cv.height = H;
+    const ctx = cv.getContext("2d");
+    ctx.fillStyle = "#0E1822";
+    ctx.fillRect(0, 0, W, H);
+    ctx.save();
+    if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(pad, pad, W - pad * 2, photoH, 28); ctx.clip(); }
+    ctx.drawImage(img, pad, pad, W - pad * 2, photoH);
+    ctx.restore();
+    ctx.textBaseline = "top";
+    ctx.fillStyle = "#EEF3F6";
+    ctx.font = font;
+    lines.forEach((l, i) => ctx.fillText(l, pad, pad + photoH + 48 + i * 62));
+    ctx.font = "500 30px system-ui, sans-serif";
+    ctx.fillStyle = "#F2C14E";
+    ctx.fillText(shown.base || shown.meta || "", pad, H - 76, 600);
+    ctx.fillStyle = "#A9BAC7";
+    ctx.textAlign = "right";
+    ctx.fillText("Vision Snapshot", W - pad, H - 76);
+    const blob = await new Promise((r) => cv.toBlob(r, "image/png"));
+    const file = new File([blob], "snapshot.png", { type: "image/png" });
+    if (navigator.canShare?.({ files: [file] })) {
+      try { await navigator.share({ files: [file] }); return; } catch { /* cancelled: fall through to download */ }
+    }
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "snapshot.png";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  }
+
   /* ---------- history ---------- */
   function renderHistory(active) {
     el.history.hidden = !history.length;
@@ -250,7 +345,7 @@
       b.append(img);
       b.setAttribute("aria-label", `Show result: ${h.label}`);
       if (i === active) b.setAttribute("aria-current", "true");
-      b.onclick = () => { show(h.label, "", h.meta); renderHistory(i); };
+      b.onclick = () => { shown = h; show(h.label, "", h.meta); renderHistory(i); };
       li.append(b);
       return li;
     }));
@@ -270,7 +365,7 @@
     el.opts.hidden = !el.opts.hidden;
     el.optsBtn.setAttribute("aria-expanded", !el.opts.hidden);
   };
-  el.shutter.onclick = analyze;
+  el.shutter.onclick = () => analyze();
   el.retry.onclick = startCamera;
   el.flip.onclick = () => { facing = facing === "environment" ? "user" : "environment"; startCamera(); };
 
@@ -322,26 +417,31 @@
   };
 
   document.addEventListener("visibilitychange", () => {
-    if (document.hidden) stopCamera();
+    if (document.hidden) { stopCamera(); window.speechSynthesis?.cancel(); }
     else if (el.still.hidden) startCamera();
   });
 
-  async function updateModelStatus() {
-    try {
-      const response = await fetch("/api/status");
-      if (!response.ok) throw new Error("Status request failed");
-      const state = await response.json();
-      el.model.textContent = state.ready
-        ? `Model ready: ${state.model}`
-        : state.configured
-          ? `Loading model: ${state.model}`
-          : `Model server unavailable: ${state.model}`;
-    } catch {
-      el.model.textContent = "Model status unavailable";
-    }
-  }
-  updateModelStatus();
-  setInterval(() => { if (!document.hidden) updateModelStatus(); }, 5000);
+  fetch("/api/status").then((r) => r.json()).then((s) => {
+    el.model.textContent = s.ready ? `Model: ${s.model}`
+      : "The model is still loading. Give it a minute, then refresh.";
+  }).catch(() => {});
+
+  // Ask bar
+  el.askBtn.onclick = askQuestion;
+  el.ask.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); askQuestion(); } });
+  el.useLast.onclick = () => el.useLast.setAttribute("aria-pressed", el.useLast.getAttribute("aria-pressed") !== "true");
+
+  // Voice and card buttons
+  if (!("speechSynthesis" in window)) el.speak.hidden = true;
+  try { speakOn = localStorage.getItem("speak") === "1"; } catch {}
+  el.speak.setAttribute("aria-pressed", speakOn);
+  el.speak.onclick = () => {
+    speakOn = !speakOn;
+    el.speak.setAttribute("aria-pressed", speakOn);
+    try { localStorage.setItem("speak", speakOn ? "1" : "0"); } catch {}
+    if (speakOn) speak("Voice on.", ""); else window.speechSynthesis?.cancel(); // the tap also unlocks audio on phones
+  };
+  el.card.onclick = saveCard;
 
   // Remember the typed place between visits
   try { el.place.value = localStorage.getItem("place") || ""; } catch {}

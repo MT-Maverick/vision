@@ -1,8 +1,8 @@
-"""Vision Snapshot: use a local llama.cpp vision model to analyze camera frames."""
+"""Vision Snapshot: point a phone or laptop camera at something and a local
+vision model (SmolVLM, run by llama.cpp inside the same container) names it or describes what is happening."""
 import asyncio
 import base64
 import binascii
-import ipaddress
 import json
 import logging
 import os
@@ -12,8 +12,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 try:  # optional: server-side downscaling. The browser already resizes frames.
@@ -26,46 +26,67 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s")
 log = logging.getLogger("vision")
 
 BASE_DIR = Path(__file__).resolve().parent
-LLAMA_SERVER_URL = os.getenv("LLAMA_SERVER_URL", "http://127.0.0.1:8080").rstrip("/")
-MODEL = os.getenv("VISION_MODEL", "SmolVLM-500M")
-NUM_CTX = int(os.getenv("NUM_CTX", "4096"))
-TIMEOUT = float(os.getenv("INFERENCE_TIMEOUT", "300"))
+# The model runs inside this container: llama.cpp's server, which speaks an OpenAI-compatible API.
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://127.0.0.1:8080/v1").rstrip("/")
+HEALTH_URL = os.getenv("LLM_HEALTH_URL", "http://127.0.0.1:8080/health")
+MODEL = os.getenv("LLM_MODEL", "SmolVLM-500M-Instruct")  # label only; the server uses the model it loaded
 MAX_DIM = int(os.getenv("MAX_DIM", "512"))
 MAX_FRAMES = 6
-# Extra text-only model call that merges per-frame answers into one. Off by default:
-# each frame is sent to the client as soon as it is ready, and the final label lists them all.
-MERGE_FRAMES = os.getenv("MERGE_FRAMES", "0") == "1"
 MAX_FRAME_BYTES = 4_000_000
-
-# Sent as the first message of every request.
-SYSTEM_PROMPT = (
-    "You are the vision component of a telemetry app. Phones and laptops send you "
-    "camera frames, and you report what is in them so the app can log and track it. "
-    "Be concise and factual. If something is unclear, say so instead of guessing. "
-    "Follow the output format asked for in each request exactly."
-)
-
-if cv2 is None:
-    log.warning("OpenCV is not installed: frames are NOT downscaled on the server, so large "
-                "images cost many more tokens. Install opencv-python-headless to enable MAX_DIM.")
+TIMEOUT = float(os.getenv("INFERENCE_TIMEOUT", "300"))
+MAX_CONCURRENT = int(os.getenv("MAX_CONCURRENT", "1"))  # a CPU handles one image at a time
 
 http: httpx.AsyncClient
-gpu_lock = asyncio.Lock()  # one inference at a time, extra phones queue up
+api_slots = asyncio.Semaphore(MAX_CONCURRENT)
 geo_cache: dict[tuple[float, float], str] = {}
-ip_geo_cache: dict = {}
+
+
+class ModelError(Exception):
+    """An error message that is safe and useful to show to the person using the app."""
+
+
+async def probe_model() -> tuple[bool, str]:
+    """(ready, reason) for the llama.cpp server."""
+    try:
+        r = await http.get(HEALTH_URL, timeout=2.0)
+        return r.status_code == 200, f"health check answered HTTP {r.status_code}"
+    except httpx.ConnectError:
+        return False, "nothing is listening on that port, so the model server isn't running"
+    except Exception as e:
+        return False, type(e).__name__
+
+
+async def model_ready() -> bool:
+    return (await probe_model())[0]
+
+
+async def watch_startup():
+    """Logs when the model server is ready, and why not while it isn't."""
+    why = ""
+    for i in range(90):
+        ok, why = await probe_model()
+        if ok:
+            log.info("Model '%s' is ready.", MODEL)
+            return
+        if i % 10 == 0:
+            log.info("Waiting for the model server: %s", why)
+        await asyncio.sleep(2)
+    log.warning("The model server did not become ready at %s (%s).", HEALTH_URL, why)
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     global http
     http = httpx.AsyncClient()
-    warm = asyncio.create_task(pre_warm_model())
+    warm = asyncio.create_task(watch_startup())
     yield
     warm.cancel()
     await http.aclose()
 
 
-app = FastAPI(title="Vision Snapshot", version="1.3.0", lifespan=lifespan)
+app = FastAPI(title="Vision Snapshot", version="3.0.0", lifespan=lifespan)
+
+
 class NoCacheStatic(StaticFiles):
     """Always revalidate, so edits to the CSS/JS show up on a normal refresh."""
     async def get_response(self, path, scope):
@@ -77,42 +98,9 @@ class NoCacheStatic(StaticFiles):
 app.mount("/static", NoCacheStatic(directory=BASE_DIR / "static"), name="static")
 
 
-async def model_state() -> dict:
-    """Reports whether llama-server is reachable and its model is ready."""
-    try:
-        response = await http.get(f"{LLAMA_SERVER_URL}/health", timeout=3.0)
-        return {
-            "model": MODEL,
-            "backend": "llama.cpp",
-            "configured": True,
-            "ready": response.status_code == 200,
-        }
-    except Exception:
-        return {
-            "model": MODEL,
-            "backend": "llama.cpp",
-            "configured": False,
-            "ready": False,
-        }
-
-
-async def pre_warm_model():
-    for _ in range(180):
-        if (await model_state())["ready"]:
-            log.info("llama.cpp model '%s' is ready.", MODEL)
-            return
-        await asyncio.sleep(1)
-    log.warning("llama.cpp model '%s' did not become ready in time.", MODEL)
-
-
 @app.get("/")
 async def index():
     return FileResponse(BASE_DIR / "index.html", headers={"Cache-Control": "no-cache"})
-
-
-@app.get("/api/status")
-async def status():
-    return await model_state()
 
 
 @app.get("/healthz")
@@ -120,33 +108,24 @@ async def healthz():
     return {"ok": True}
 
 
-def visitor_ip(request: Request) -> str:
-    fwd = request.headers.get("x-forwarded-for", "")
-    return fwd.split(",")[0].strip() if fwd else (request.client.host if request.client else "")
+@app.get("/api/status")
+async def status():
+    return {"model": MODEL, "ready": await model_ready()}
 
 
-@app.get("/api/ip-location")
-async def ip_location(request: Request):
-    """City-level location from the visitor's public IP, used when the browser
-    cannot get a GPS or Wi-Fi fix. On a LAN the visitor's IP is private, so we
-    look up this server's own public IP instead (same network, same city)."""
-    ip = visitor_ip(request)
-    try:
-        target = ip if ipaddress.ip_address(ip).is_global else ""
-    except ValueError:
-        target = ""
-    hit = ip_geo_cache.get(target)
-    if hit and time.time() - hit["t"] < 3600:
-        return hit["v"]
-    try:
-        d = (await http.get(f"https://ipwho.is/{target}", timeout=5.0)).json()
-        if d.get("success"):
-            v = {"latitude": d["latitude"], "longitude": d["longitude"]}
-            ip_geo_cache[target] = {"v": v, "t": time.time()}
-            return v
-    except Exception as e:
-        log.info("IP location unavailable: %s", e)
-    return JSONResponse({"error": "unavailable"}, status_code=503)
+WARD = re.compile(r"\bward\s*\d+\b", re.I)
+
+
+def place_name(a: dict) -> str:
+    """Builds 'suburb, town, country' from a Nominatim address.
+    South African data tags election wards as 'suburb' and municipalities as 'city',
+    so we skip ward labels and prefer the town or village when there is one."""
+    suburb = next((a[k] for k in ("suburb", "neighbourhood", "quarter")
+                   if a.get(k) and not WARD.search(a[k])), "")
+    town = a.get("town") or a.get("village") or a.get("city") or a.get("municipality") or ""
+    if suburb == town:
+        suburb = ""
+    return ", ".join(p for p in (suburb, town, a.get("country", "")) if p)
 
 
 async def reverse_geocode(lat: float, lon: float) -> str:
@@ -158,17 +137,11 @@ async def reverse_geocode(lat: float, lon: float) -> str:
         r = await http.get(
             "https://nominatim.openstreetmap.org/reverse",
             params={"format": "json", "lat": lat, "lon": lon, "zoom": 16},
-            headers={"User-Agent": "SnapshotVisionEngine/2.0"},
+            headers={"User-Agent": "SnapshotVisionEngine/3.0"},
             timeout=5.0,
         )
         if r.status_code == 200:
-            a = r.json().get("address", {})
-            parts = [
-                a.get("suburb") or a.get("neighbourhood") or a.get("village") or "",
-                a.get("city") or a.get("town") or a.get("municipality") or "",
-                a.get("country", ""),
-            ]
-            name = ", ".join(p for p in parts if p)
+            name = place_name(r.json().get("address", {}))
             if name:
                 geo_cache[key] = name
                 return name
@@ -207,106 +180,86 @@ def prepare_frames(images: list) -> list[str]:
     return out
 
 
-def build_prompt(mode: str, n_frames: int, place: str | None, index: int | None = None) -> str:
-    if n_frames > 1 and index:
-        source = f"This is frame {index} of {n_frames} from one short camera clip, in order."
-    elif n_frames > 1:
-        source = f"These {n_frames} images are frames from one short camera clip, in order."
-    else:
-        source = "This is a single photo from a camera."
+STYLE_TASKS = {
+    "identify": ("Identify the main object, person, animal, landmark, or activity. "
+                 "Reply with only its name in 1 to 5 words, with no punctuation."),
+    "describe": ("Describe this in three or four sentences. Cover who or what is in the frame, what they are doing, "
+                 "their clothing, expression and posture if visible, the objects around them, the setting, "
+                 "and the lighting. Only state what is visible; do not guess."),
+    "narrate": ("Narrate this like a calm nature-documentary presenter, in two short sentences. "
+                "Only mention things that are visible."),
+    "story": ("Write a tiny three-sentence story inspired by what you see, in the style of a film-noir "
+              "detective. Only use things that are visible."),
+    "funny": ("Make one light-hearted, affectionate joke about the scene in a single sentence. "
+              "Never insult anyone's appearance."),
+    "funfact": ("Name the main object, animal or landmark, then give one short fun fact about it. "
+                "If you are not sure what it is, say what it looks like instead of guessing."),
+}
+CREATIVE = {"narrate", "story", "funny", "funfact"}
+MODES = set(STYLE_TASKS) | {"ask"}
+MAX_TOKENS = {"ask": 120, "identify": 40, "describe": 220, "narrate": 150, "story": 170, "funny": 70, "funfact": 110, "scout": 6}
+
+
+def build_prompt(mode: str, n_frames: int, place: str | None, question: str = "") -> str:
+    source = (f"These {n_frames} images are frames from one short camera clip, in order."
+              if n_frames > 1 else "This is a single photo from a camera.")
     where = f" It was taken near {place}." if place else ""
-    if mode == "describe":
-        task = ("Describe the object, person, animal, landmark, or activity happening in the frame, in one or two short sentences. "
-                "Mention the main subject, what it is doing, and the setting. ")
+    if mode == "ask":
+        noun = "images" if n_frames > 1 else "image"
+        task = (f"Answer this question about the {noun}: {question} "
+                "Reply briefly and only use what is visible. If the answer cannot be seen, say so.")
     else:
-        task = ("Identify the main object, person, animal, landmark, or activity in the frame. "
-                "Reply with only the name in 1 to 5 words.")
+        task = STYLE_TASKS.get(mode, STYLE_TASKS["identify"])
     return f"{source}{where} {task}"
 
 
-async def ask_model(prompt: str, frames: list[str], mode: str, timeout: float = TIMEOUT) -> str:
-    content = [{"type": "text", "text": prompt}]
-    content.extend({
-        "type": "image_url",
-        "image_url": {"url": f"data:image/jpeg;base64,{frame}"},
-    } for frame in frames)
-    user_msg = {"role": "user", "content": content if frames else prompt}
+def log_timings(data: dict, elapsed: float) -> None:
+    """Logs where the time went, using the llama.cpp server's own timing figures."""
+    t = data.get("timings") or {}
+    try:
+        log.info("Took %.1fs. Reading photo and prompt: %.1fs (%.0f tokens/s). Writing the answer: %.1fs (%.1f tokens/s, %d tokens).",
+                 elapsed, t.get("prompt_ms", 0) / 1000, t.get("prompt_per_second", 0),
+                 t.get("predicted_ms", 0) / 1000, t.get("predicted_per_second", 0), int(t.get("predicted_n", 0)))
+    except Exception:
+        log.info("Took %.1fs.", elapsed)
+
+
+async def ask_model(prompt: str, frames: list[str], mode: str) -> str:
+    content = [{"type": "text", "text": prompt}] + [
+        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b}"}} for b in frames
+    ]
     payload = {
         "model": MODEL,
-        "messages": [{"role": "system", "content": SYSTEM_PROMPT}, user_msg],
+        "messages": [{"role": "user", "content": content}],
+        "max_tokens": MAX_TOKENS.get(mode, 40),
+        "temperature": 0.7 if mode in CREATIVE else 0.1,
         "stream": False,
-        "temperature": 0.1,
-        "max_tokens": {"describe": 160, "scout": 6}.get(mode, 40),
     }
-    r = await http.post(f"{LLAMA_SERVER_URL}/v1/chat/completions", json=payload, timeout=timeout)
-    r.raise_for_status()
-    choices = r.json().get("choices", [])
-    text = choices[0].get("message", {}).get("content", "") if choices else ""
-    if isinstance(text, list):
-        text = "".join(part.get("text", "") for part in text if isinstance(part, dict))
+    started = time.perf_counter()
+    try:
+        r = await http.post(f"{LLM_BASE_URL}/chat/completions", json=payload, timeout=TIMEOUT)
+    except httpx.ConnectError:
+        log.warning("Can't connect to the model server at %s", LLM_BASE_URL)
+        raise ModelError("The model isn't ready yet. Give it a minute and try again.")
+    if r.status_code >= 400:
+        try:
+            body = r.json()
+            err = body.get("error", body)
+            detail = err.get("message", "") if isinstance(err, dict) else str(err)
+        except Exception:
+            detail = r.text[:200]
+        log.warning("Model server returned %s: %s", r.status_code, detail)
+        if r.status_code == 503:
+            raise ModelError("The model is still loading. Give it a minute and try again.")
+        raise ModelError(f"Model error: {detail or r.status_code}")
+    data = r.json()
+    log_timings(data, time.perf_counter() - started)
+    msg = (data.get("choices") or [{}])[0].get("message", {})
+    text = msg.get("content") or ""
+    if isinstance(text, list):  # some servers return a list of content parts
+        text = "".join(p.get("text", "") for p in text if isinstance(p, dict))
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
     return text or "Nothing recognised"
-
-
-def model_error(e: httpx.HTTPStatusError) -> str:
-    try:
-        return e.response.json().get("error", e.response.text)
-    except Exception:
-        return e.response.text
-
-
-def join_results(results: list[str]) -> str:
-    return " ".join(f"({i}) {t}" for i, t in enumerate(results, start=1))
-
-
-async def combine_results(mode: str, results: list[str]) -> str:
-    """Merges per-frame answers into one with a text-only call (no image tokens, so it is fast)."""
-    if mode != "describe" and len({r.strip().lower() for r in results}) == 1:
-        return results[0]  # every frame gave the same name, nothing to merge
-    numbered = "\n".join(f"Frame {i}: {t}" for i, t in enumerate(results, start=1))
-    if mode == "describe":
-        task = ("These are descriptions of consecutive frames from one short camera clip. "
-                "In one or two short sentences, describe what is happening overall.")
-    else:
-        task = ("These are names given to consecutive frames from one short camera clip. "
-                "Reply with only the single most fitting name, in 1 to 5 words.")
-    try:
-        async with gpu_lock:
-            return await ask_model(f"{task}\n{numbered}", [], mode, timeout=60.0)
-    except Exception as e:
-        log.warning("Combine step failed (%s), returning every frame instead", type(e).__name__)
-        return join_results(results)
-
-
-async def analyse_frames(mode: str, frames: list[str], place: str | None,
-                         progress=None, on_frame=None) -> tuple[str, list[str]]:
-    """Sends the frames to the model one request per image, so each call stays well under
-    INFERENCE_TIMEOUT, then merges the answers. The lock is taken per call, so other
-    clients can slot in between frames instead of waiting for a whole burst."""
-    results: list[str] = []
-    last_error: Exception | None = None
-    total = len(frames)
-    for i, frame in enumerate(frames, start=1):
-        if progress:
-            await progress(i, total)
-        try:
-            async with gpu_lock:
-                text = await ask_model(build_prompt(mode, total, place, i), [frame], mode)
-            results.append(text)
-            if on_frame:  # release this frame's answer now, don't wait for the rest
-                await on_frame(i, total, text)
-        except httpx.TimeoutException as e:  # skip a slow frame, keep the rest
-            log.warning("Frame %d/%d timed out", i, total)
-            last_error = e
-    if not results:
-        raise last_error or RuntimeError("No frame could be analysed")
-    if len(results) == 1:
-        label = results[0]
-    elif MERGE_FRAMES:
-        label = await combine_results(mode, results)
-    else:
-        label = join_results(results)
-    return label, results
 
 
 def parse_location(loc) -> tuple[float, float] | None:
@@ -334,7 +287,7 @@ async def run_scout(ws: WebSocket, msg: dict):
     async def out(status: str, hit=None):
         await ws.send_json({"id": rid, "type": "scout", "status": status, "hit": hit})
 
-    if not frames or not targets or gpu_lock.locked():
+    if not frames or not targets or api_slots.locked():
         return await out("skipped")
     options = [t.upper() for t in targets] + ["NONE"]
     prompt = (
@@ -343,7 +296,7 @@ async def run_scout(ws: WebSocket, msg: dict):
         + f"? If several apply, pick the most prominent. Reply with exactly one word: {', '.join(options)}."
     )
     try:
-        async with gpu_lock:
+        async with api_slots:
             text = (await ask_model(prompt, frames, "scout")).upper()
         found = [(text.find(o), o) for o in options if o in text]
         hit = min(found)[1].lower() if found else None
@@ -379,33 +332,29 @@ async def vision_websocket(ws: WebSocket):
                 await reply("error", "No usable image received")
                 continue
 
-            mode = "describe" if msg.get("mode") == "describe" else "identify"
+            mode = msg.get("mode") if msg.get("mode") in MODES else "identify"
+            question = re.sub(r"[\x00-\x1f]", " ", str(msg.get("question") or "")).strip()[:300]
+            if mode == "ask" and not question:
+                await reply("error", "Type a question first")
+                continue
             coords = parse_location(msg.get("location"))
-            place = await reverse_geocode(*coords) if coords else None
+            typed = re.sub(r"[\x00-\x1f]", " ", str(msg.get("place") or "")).strip()[:80]
+            place = typed or (await reverse_geocode(*coords) if coords else None)
 
             await reply("working")
             log.info("%s: %d frame(s)%s", mode, len(frames), f" near {place}" if place else "")
             try:
-                async def progress(i: int, n: int):
-                    if n > 1:
-                        await reply("working", frame=i, frames=n)
-
-                async def on_frame(i: int, n: int, text: str):
-                    if n > 1:
-                        await reply("working", text, frame=i, frames=n, partial=True)
-
-                label, frame_labels = await analyse_frames(mode, frames, place, progress, on_frame)
+                async with api_slots:
+                    label = await ask_model(build_prompt(mode, len(frames), place, question), frames, mode)
                 log.info("Result: %s", label)
-                await reply("success", label, location_name=place, frame_labels=frame_labels,
+                await reply("success", label, location_name=place,
                             coords={"latitude": coords[0], "longitude": coords[1]} if coords else None)
-            except httpx.ConnectError:
-                await reply("error", f"Cannot reach llama.cpp at {LLAMA_SERVER_URL}. Is it running?")
-            except httpx.HTTPStatusError as e:
-                detail = model_error(e)
-                log.warning("llama.cpp error: %s", detail)
-                await reply("error", f"llama.cpp: {detail}")
+            except ModelError as e:
+                await reply("error", str(e))
             except httpx.TimeoutException:
                 await reply("error", "The model took too long to answer")
+            except httpx.RequestError:
+                await reply("error", "Couldn't reach the model service.")
             except Exception as e:
                 log.exception("Inference failed")
                 await reply("error", f"Unexpected error: {e}")

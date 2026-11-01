@@ -6,10 +6,10 @@ ARG LLAMA_IMAGE=ghcr.io/ggml-org/llama.cpp:server
 FROM debian:stable-slim AS models
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
-# Pick the model with --build-arg PRESET=fast|balanced (default: fast).
+# Pick the model with --build-arg PRESET=fast|balanced (default: balanced).
 #   fast      SmolVLM-500M, about 0.55 GB. Quickest, but short and shallow answers.
 #   balanced  Qwen3-VL-2B (4-bit), about 1.55 GB. Follows instructions much better; slower and needs more memory.
-ARG PRESET=fast
+ARG PRESET=balanced
 WORKDIR /models
 RUN case "$PRESET" in \
       fast)     REPO=ggml-org/SmolVLM-500M-Instruct-GGUF; LM=SmolVLM-500M-Instruct-Q8_0.gguf; PROJ=mmproj-SmolVLM-500M-Instruct-Q8_0.gguf; NAME=SmolVLM-500M ;; \
@@ -28,7 +28,6 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PATH=/opt/venv/bin:$PATH \
-    NUM_CTX=4096 \
     MAX_DIM=512 \
     PORT=10000
 
@@ -47,7 +46,7 @@ COPY main.py index.html start.sh healthcheck.py ./
 COPY static ./static
 RUN chmod +x start.sh
 
-# Docker checks both the web app and llama.cpp every 30 seconds.
+# Docker runs this every 30 s. It logs each result to `docker logs` and marks the container healthy/unhealthy.
 # The start period gives the model time to load before failures count.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=180s --retries=3 \
   CMD ["python", "/srv/app/healthcheck.py"]
