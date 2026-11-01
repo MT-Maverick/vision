@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>Vision Snapshot</title>
-<link rel="stylesheet" href="/static/style.css?v=3">
+<link rel="stylesheet" href="/static/style.css?v=5">
 </head>
 <body>
 <div class="app" id="stage">
@@ -39,6 +39,13 @@
       <button data-group="mode" data-value="funny" aria-pressed="false">Joke</button>
       <button data-group="mode" data-value="funfact" aria-pressed="false">Fun fact</button>
     </div>
+    <p class="label">Skills</p>
+    <div class="skills" role="group" aria-label="Optional model skills">
+      <button class="chip" data-skill="web" aria-pressed="true">Web lookup</button>
+      <button class="chip" data-skill="detail" aria-pressed="false">More detail</button>
+      <button class="chip" data-skill="text" aria-pressed="false">Read visible text</button>
+    </div>
+    <p class="foot">Web lookup sends typed questions to DuckDuckGo. Camera images stay local.</p>
     <button class="chip" id="speak" aria-pressed="false">Read answers aloud</button>
     <div class="seg" role="group" aria-label="Frames">
       <button data-group="frames" data-value="1" aria-pressed="true">One frame</button>
@@ -62,6 +69,7 @@
     <ol class="history" id="history" aria-label="Recent results" hidden></ol>
     <div class="readout glass" aria-live="polite">
       <p class="result idle" id="result">Point at something and press the shutter, or ask a question below.</p>
+      <div class="sources" id="sources" aria-label="Web sources" hidden></div>
       <p class="meta" id="meta"></p>
       <button class="chip small" id="card" hidden>Save as card</button>
       <div class="ask">
@@ -77,6 +85,6 @@
     </div>
   </footer>
 </div>
-<script src="/static/script.js?v=3"></script>
+<script src="/static/script.js?v=5"></script>
 </body>
 </html>

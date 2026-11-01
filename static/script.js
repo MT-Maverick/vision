@@ -10,9 +10,10 @@
   const HOLD_MS = 30000;       // after a hit, wait for a scene change or this long before triggering again
 
   const el = Object.fromEntries(
-    ["stage","video","still","empty","emptyMsg","retry","dot","conn","pill","result","meta","shutter",
+    ["stage","video","still","empty","emptyMsg","retry","dot","conn","pill","result","sources","meta","shutter",
      "flip","watch","loc","place","speak","card","ask","askBtn","useLast","file","history","model","opts","optsBtn","tPerson","tLandmark"].map((k) => [k, $(k)]));
   const opts = { mode: "identify", frames: 1 };
+  const skills = { web: true, detail: false, text: false };
   const targets = { person: true, landmark: true };
 
   let ws, stream, facing = "environment", busy = false, pending = null, nextId = 1, retries = 0;
@@ -135,9 +136,25 @@
     el.stage.classList.toggle("looking", b || scouting);
     el.shutter.disabled = b;
   }
-  function show(text, kind = "", meta = "") {
+  function show(text, kind = "", meta = "", sources = []) {
     el.result.textContent = text;
     el.result.className = "result " + (kind || (text.length > 40 ? "long" : ""));
+    const links = sources.flatMap((source) => {
+      try {
+        const url = new URL(source.url);
+        if (!["http:", "https:"].includes(url.protocol)) return [];
+        const link = document.createElement("a");
+        link.href = url.href;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.textContent = source.title || url.hostname;
+        return [link];
+      } catch {
+        return [];
+      }
+    });
+    el.sources.replaceChildren(...links);
+    el.sources.hidden = links.length === 0;
     el.meta.textContent = meta;
     el.card.hidden = !!kind || !shown;
     el.useLast.hidden = !shown;
@@ -158,7 +175,7 @@
     const place = el.place.value.trim();
     const location = !place && locOn ? await getLoc() : null;
     pending = { id: nextId++, thumb, frame: images[0], question, mode: question ? "ask" : opts.mode, gps: location ? location.accuracy : null };
-    ws.send(JSON.stringify({ id: pending.id, mode: pending.mode, question, images, location, place }));
+    ws.send(JSON.stringify({ id: pending.id, mode: pending.mode, question, images, location, place, skills }));
   }
 
   async function captureFrames() {
@@ -208,8 +225,9 @@
       const acc = p.gps != null ? `±${fmtDist(p.gps)}` : "";
       const base = [m.location_name, acc, when].filter(Boolean).join(" · ");
       const meta = p.question ? `Q: ${p.question} · ${base}` : base;
-      shown = { thumb: p.thumb, frame: p.frame, label: m.label, meta, base };
-      show(m.label, "", meta);
+      const sources = Array.isArray(m.sources) ? m.sources : [];
+      shown = { thumb: p.thumb, frame: p.frame, label: m.label, meta, base, sources };
+      show(m.label, "", meta, sources);
       history.unshift(shown);
       speak(m.label, p.mode);
       history.length = Math.min(history.length, MAX_HISTORY);
@@ -345,7 +363,7 @@
       b.append(img);
       b.setAttribute("aria-label", `Show result: ${h.label}`);
       if (i === active) b.setAttribute("aria-current", "true");
-      b.onclick = () => { shown = h; show(h.label, "", h.meta); renderHistory(i); };
+      b.onclick = () => { shown = h; show(h.label, "", h.meta, h.sources || []); renderHistory(i); };
       li.append(b);
       return li;
     }));
@@ -357,6 +375,19 @@
     opts[g] = g === "frames" ? Number(b.dataset.value) : b.dataset.value;
     document.querySelectorAll(`[data-group="${g}"]`).forEach((x) => x.setAttribute("aria-pressed", x === b));
   }));
+  document.querySelectorAll(".skills button[data-skill]").forEach((b) => {
+    const skill = b.dataset.skill;
+    try {
+      const saved = JSON.parse(localStorage.getItem("skills") || "{}");
+      if (typeof saved[skill] === "boolean") skills[skill] = saved[skill];
+    } catch {}
+    b.setAttribute("aria-pressed", skills[skill]);
+    b.onclick = () => {
+      skills[skill] = !skills[skill];
+      b.setAttribute("aria-pressed", skills[skill]);
+      try { localStorage.setItem("skills", JSON.stringify(skills)); } catch {}
+    };
+  });
   [["tPerson", "person"], ["tLandmark", "landmark"]].forEach(([id, k]) => {
     el[id].onclick = () => { targets[k] = !targets[k]; el[id].setAttribute("aria-pressed", targets[k]); };
   });

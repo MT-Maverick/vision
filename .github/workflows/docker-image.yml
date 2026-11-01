@@ -11,13 +11,13 @@ on:
       preset:
         description: "Vision model preset to bake into the image"
         type: choice
-        options: [fast, balanced]
+        options: [tiny, fast, balanced]
         required: true
-        default: fast
+        default: tiny
 
 env:
   REGISTRY: ghcr.io
-  DEFAULT_PRESET: fast
+  DEFAULT_PRESET: tiny
 
 permissions:
   contents: read
