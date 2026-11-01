@@ -31,7 +31,7 @@ The model files are selected at build time. `LLM_MODEL` is the request alias exp
 
 1. Allow camera access when prompted. Use **Flip** to switch between front and rear cameras.
 2. Press the shutter to analyze the current view. In **Options**, choose **Name it** for a short label or **Describe it** for a brief description.
-3. Use **Skills** in **Options** to toggle DuckDuckGo web lookup, more detailed answers, and reading visible text. Web lookup applies to typed questions; it is enabled by default and can be turned off.
+3. Use **Skills** in **Options** to toggle Wikimedia web lookup, more detailed answers, and reading visible text. Web lookup applies to typed questions; it is enabled by default and can be turned off.
 4. Choose **Burst of 4** to analyze several frames from a short camera clip.
 5. Turn on **Watch** to check for selected people or landmarks and analyze the view when one is spotted.
 6. Location is optional. Enable it for browser GPS, or enter a place in **Options**. A typed place overrides GPS.
@@ -77,4 +77,4 @@ Open [http://localhost:10000](http://localhost:10000).
 
 ## Location and privacy
 
-Camera frames are sent to the llama.cpp server configured for the app. In the Docker setup, llama.cpp runs locally in the same container. When **Web lookup** is enabled, the typed question is sent to DuckDuckGo's web search; the app retrieves up to three result pages and provides their text to the local model as reference material. Camera images are not sent to DuckDuckGo. Page fetches are limited to public HTTP(S) hosts and bounded in size. Disable the skill to keep typed questions local. Location is off by default; enabling it asks the browser for GPS permission and uses a geocoding service to turn coordinates into a place name. A manually entered place is sent to the local model as context.
+Camera frames are sent to the llama.cpp server configured for the app. In the Docker setup, llama.cpp runs locally in the same container. When **Web lookup** is enabled, the typed question is sent to the Wikimedia API, which searches English Wikipedia and returns up to three article extracts to the local model as reference material. Camera images are not sent to Wikimedia. Answers include links to the referenced articles. Disable the skill to keep typed questions local. Location is off by default; enabling it asks the browser for GPS permission and uses a geocoding service to turn coordinates into a place name. A manually entered place is sent to the local model as context.
