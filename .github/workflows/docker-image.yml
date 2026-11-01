@@ -8,14 +8,16 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
-      model:
-        description: "Ollama model to bake into the image (e.g. gemma3:4b)"
-        required: false
-        default: "qwen3-vl:2b"
+      preset:
+        description: "Vision model preset to bake into the image"
+        type: choice
+        options: [fast, balanced]
+        required: true
+        default: fast
 
 env:
   REGISTRY: ghcr.io
-  DEFAULT_MODEL: qwen3-vl:2b
+  DEFAULT_PRESET: fast
 
 permissions:
   contents: read
@@ -64,6 +66,6 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            MODEL=${{ inputs.model || env.DEFAULT_MODEL }}
+            PRESET=${{ inputs.preset || env.DEFAULT_PRESET }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

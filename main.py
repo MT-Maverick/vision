@@ -1,5 +1,4 @@
-"""Vision Snapshot: point a phone or laptop camera at something and a local
-vision LLM (served by Ollama) names it or describes what is happening."""
+"""Vision Snapshot: use a local llama.cpp vision model to analyze camera frames."""
 import asyncio
 import base64
 import binascii
@@ -27,10 +26,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s")
 log = logging.getLogger("vision")
 
 BASE_DIR = Path(__file__).resolve().parent
-_ollama = os.getenv("OLLAMA_URL", "http://localhost:11434").rstrip("/")
-OLLAMA_URL = _ollama if _ollama.startswith(("http://", "https://")) else f"http://{_ollama}"
-# Must be a vision model (qwen3:8b is text-only). qwen3-vl:2b is light enough for a CPU.
-MODEL = os.getenv("VISION_MODEL", "qwen3-vl:2b")
+LLAMA_SERVER_URL = os.getenv("LLAMA_SERVER_URL", "http://127.0.0.1:8080").rstrip("/")
+MODEL = os.getenv("VISION_MODEL", "SmolVLM-500M")
 NUM_CTX = int(os.getenv("NUM_CTX", "4096"))
 TIMEOUT = float(os.getenv("INFERENCE_TIMEOUT", "300"))
 MAX_DIM = int(os.getenv("MAX_DIM", "512"))
@@ -40,9 +37,7 @@ MAX_FRAMES = 6
 MERGE_FRAMES = os.getenv("MERGE_FRAMES", "0") == "1"
 MAX_FRAME_BYTES = 4_000_000
 
-# Sent as the first message of every request (warm-up included). Keep it identical
-# everywhere and always first: Ollama reuses the cached start of the prompt, so the
-# warm-up pre-computes it and later requests skip re-processing it.
+# Sent as the first message of every request.
 SYSTEM_PROMPT = (
     "You are the vision component of a telemetry app. Phones and laptops send you "
     "camera frames, and you report what is in them so the app can log and track it. "
@@ -83,49 +78,31 @@ app.mount("/static", NoCacheStatic(directory=BASE_DIR / "static"), name="static"
 
 
 async def model_state() -> dict:
-    """Reports whether Ollama is reachable and the model is installed/loaded."""
+    """Reports whether llama-server is reachable and its model is ready."""
     try:
-        tags = (await http.get(f"{OLLAMA_URL}/api/tags", timeout=3.0)).json()
-        installed = [m.get("name", "") for m in tags.get("models", [])]
-        running = (await http.get(f"{OLLAMA_URL}/api/ps", timeout=3.0)).json()
-        loaded = [m.get("name", "") for m in running.get("models", [])]
+        response = await http.get(f"{LLAMA_SERVER_URL}/health", timeout=3.0)
         return {
             "model": MODEL,
-            "ollama": True,
-            "installed": any(n.startswith(MODEL) for n in installed),
-            "loaded": any(n.startswith(MODEL) for n in loaded),
-            "available": installed,
+            "backend": "llama.cpp",
+            "configured": True,
+            "ready": response.status_code == 200,
         }
     except Exception:
-        return {"model": MODEL, "ollama": False, "installed": False, "loaded": False}
+        return {
+            "model": MODEL,
+            "backend": "llama.cpp",
+            "configured": False,
+            "ready": False,
+        }
 
 
 async def pre_warm_model():
-    state = await model_state()
-    if not state["ollama"]:
-        log.warning("Ollama is not reachable at %s. Start it with `ollama serve`.", OLLAMA_URL)
-        return
-    if not state["installed"]:
-        log.warning("Model '%s' is not installed. Run `ollama pull %s`. Installed: %s",
-                    MODEL, MODEL, ", ".join(state["available"]) or "none")
-        return
-    if state["loaded"]:
-        log.info("Model '%s' is already in memory.", MODEL)
-        return
-    log.info("Loading '%s' into memory...", MODEL)
-    try:
-        await http.post(f"{OLLAMA_URL}/api/chat", timeout=180.0, json={
-            "model": MODEL,
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": "hi"},
-            ],
-            "stream": False, "keep_alive": "24h", "think": False,
-            "options": {"num_predict": 1, "num_ctx": NUM_CTX},
-        })
-        log.info("Model ready.")
-    except Exception as e:
-        log.warning("Warm-up failed: %s", e)
+    for _ in range(180):
+        if (await model_state())["ready"]:
+            log.info("llama.cpp model '%s' is ready.", MODEL)
+            return
+        await asyncio.sleep(1)
+    log.warning("llama.cpp model '%s' did not become ready in time.", MODEL)
 
 
 @app.get("/")
@@ -248,30 +225,30 @@ def build_prompt(mode: str, n_frames: int, place: str | None, index: int | None 
 
 
 async def ask_model(prompt: str, frames: list[str], mode: str, timeout: float = TIMEOUT) -> str:
-    user_msg = {"role": "user", "content": prompt}
-    if frames:  # the combine step is text-only
-        user_msg["images"] = frames
+    content = [{"type": "text", "text": prompt}]
+    content.extend({
+        "type": "image_url",
+        "image_url": {"url": f"data:image/jpeg;base64,{frame}"},
+    } for frame in frames)
+    user_msg = {"role": "user", "content": content if frames else prompt}
     payload = {
         "model": MODEL,
         "messages": [{"role": "system", "content": SYSTEM_PROMPT}, user_msg],
         "stream": False,
-        "think": False,  # skip the reasoning phase: it is slow on CPU and would eat the short answer budget
-        "keep_alive": "24h",
-        "options": {
-            "temperature": 0.1,
-            "num_ctx": NUM_CTX,
-            # Hard cap on generated tokens. Without it a text-only call can ramble until the timeout.
-            "num_predict": {"describe": 160, "scout": 6}.get(mode, 40),
-        },
+        "temperature": 0.1,
+        "max_tokens": {"describe": 160, "scout": 6}.get(mode, 40),
     }
-    r = await http.post(f"{OLLAMA_URL}/api/chat", json=payload, timeout=timeout)
+    r = await http.post(f"{LLAMA_SERVER_URL}/v1/chat/completions", json=payload, timeout=timeout)
     r.raise_for_status()
-    text = r.json().get("message", {}).get("content", "")
-    text = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()  # older Ollama may inline reasoning
+    choices = r.json().get("choices", [])
+    text = choices[0].get("message", {}).get("content", "") if choices else ""
+    if isinstance(text, list):
+        text = "".join(part.get("text", "") for part in text if isinstance(part, dict))
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
     return text or "Nothing recognised"
 
 
-def ollama_error(e: httpx.HTTPStatusError) -> str:
+def model_error(e: httpx.HTTPStatusError) -> str:
     try:
         return e.response.json().get("error", e.response.text)
     except Exception:
@@ -422,11 +399,11 @@ async def vision_websocket(ws: WebSocket):
                 await reply("success", label, location_name=place, frame_labels=frame_labels,
                             coords={"latitude": coords[0], "longitude": coords[1]} if coords else None)
             except httpx.ConnectError:
-                await reply("error", f"Cannot reach Ollama at {OLLAMA_URL}. Is it running?")
+                await reply("error", f"Cannot reach llama.cpp at {LLAMA_SERVER_URL}. Is it running?")
             except httpx.HTTPStatusError as e:
-                detail = ollama_error(e)
-                log.warning("Ollama error: %s", detail)
-                await reply("error", f"Ollama: {detail}")
+                detail = model_error(e)
+                log.warning("llama.cpp error: %s", detail)
+                await reply("error", f"llama.cpp: {detail}")
             except httpx.TimeoutException:
                 await reply("error", "The model took too long to answer")
             except Exception as e:

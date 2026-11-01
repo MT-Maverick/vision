@@ -1,36 +1,38 @@
 #!/usr/bin/env bash
-# Container launcher: starts Ollama, makes sure the model exists, then starts the web app.
-# Render provides HTTPS, so the app serves plain HTTP here.
-# If either process stops, the container exits so Render restarts it.
+# Keep llama-server private to the container; Render provides external HTTPS.
 set -u
 PORT="${PORT:-10000}"
+LLAMA_PORT="${LLAMA_PORT:-8080}"
+NUM_CTX="${NUM_CTX:-4096}"
+LLAMA_SERVER_URL="${LLAMA_SERVER_URL:-http://127.0.0.1:$LLAMA_PORT}"
+VISION_MODEL="$(cat /models/name.txt)"
+export LLAMA_SERVER_URL VISION_MODEL
 
-# 1. Ollama (listens inside the container only)
-ollama serve &
-OLLAMA_PID=$!
-for _ in $(seq 1 60); do
-  ollama list >/dev/null 2>&1 && break
-  kill -0 "$OLLAMA_PID" 2>/dev/null || { echo "Ollama failed to start"; exit 1; }
-  sleep 1
-done
-echo "Ollama is running."
-
-# 2. Model: baked into the image, so this only downloads if VISION_MODEL was changed
-want="$VISION_MODEL"
-case "$want" in *:*) ;; *) want="$want:latest" ;; esac
-if ! ollama list | awk 'NR>1{print $1}' | grep -qx "$want"; then
-  echo "Model '$want' is not in the image. Downloading it ..."
-  ollama pull "$VISION_MODEL" || echo "Could not download '$VISION_MODEL'. Analysis will fail until it exists."
+LLAMA_SERVER_BIN="$(command -v llama-server || true)"
+if [[ -z "$LLAMA_SERVER_BIN" && -x /app/llama-server ]]; then
+  LLAMA_SERVER_BIN=/app/llama-server
+fi
+if [[ -z "$LLAMA_SERVER_BIN" ]]; then
+  echo "Could not find the llama-server executable."
+  exit 127
 fi
 
-# 3. Web app
+"$LLAMA_SERVER_BIN" \
+  --model /models/model.gguf \
+  --mmproj /models/mmproj.gguf \
+  --alias "$VISION_MODEL" \
+  --host 127.0.0.1 \
+  --port "$LLAMA_PORT" \
+  --ctx-size "$NUM_CTX" &
+LLAMA_PID=$!
+
 uvicorn main:app --host 0.0.0.0 --port "$PORT" \
   --proxy-headers --forwarded-allow-ips='*' &
 APP_PID=$!
 
-trap 'kill "$OLLAMA_PID" "$APP_PID" 2>/dev/null' TERM INT
-wait -n "$OLLAMA_PID" "$APP_PID"
+trap 'kill "$LLAMA_PID" "$APP_PID" 2>/dev/null' TERM INT
+wait -n "$LLAMA_PID" "$APP_PID"
 code=$?
 echo "A process exited (code $code). Stopping container."
-kill "$OLLAMA_PID" "$APP_PID" 2>/dev/null
+kill "$LLAMA_PID" "$APP_PID" 2>/dev/null
 exit "$code"

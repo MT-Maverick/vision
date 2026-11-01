@@ -326,10 +326,22 @@
     else if (el.still.hidden) startCamera();
   });
 
-  fetch("/api/status").then((r) => r.json()).then((s) => {
-    el.model.textContent = !s.configured ? "The server has no HF_TOKEN set."
-      : `Model: ${s.model}`;
-  }).catch(() => {});
+  async function updateModelStatus() {
+    try {
+      const response = await fetch("/api/status");
+      if (!response.ok) throw new Error("Status request failed");
+      const state = await response.json();
+      el.model.textContent = state.ready
+        ? `Model ready: ${state.model}`
+        : state.configured
+          ? `Loading model: ${state.model}`
+          : `Model server unavailable: ${state.model}`;
+    } catch {
+      el.model.textContent = "Model status unavailable";
+    }
+  }
+  updateModelStatus();
+  setInterval(() => { if (!document.hidden) updateModelStatus(); }, 5000);
 
   // Remember the typed place between visits
   try { el.place.value = localStorage.getItem("place") || ""; } catch {}
