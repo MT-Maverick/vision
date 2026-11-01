@@ -2,7 +2,14 @@
 #   docker build --build-arg LLAMA_IMAGE=ghcr.io/ggml-org/llama.cpp:<older tag> .
 ARG LLAMA_IMAGE=ghcr.io/ggml-org/llama.cpp:server
 
-# Stage 1: download the model files (kept out of the final image's build tooling)
+# Stage 1: compile the Rust app for the runtime image.
+FROM rust:1-bookworm AS builder
+WORKDIR /build
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+RUN cargo build --release --locked
+
+# Stage 2: download the model files (kept out of the final image's build tooling)
 FROM debian:stable-slim AS models
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
@@ -20,36 +27,31 @@ RUN case "$PRESET" in \
  && curl -fL --retry 3 -o mmproj.gguf "https://huggingface.co/$REPO/resolve/main/$PROJ" \
  && echo "$NAME" > name.txt
 
-# Stage 2: llama.cpp's official CPU server image + our Python app
+# Stage 3: llama.cpp's official CPU server image + our Rust app
 FROM ${LLAMA_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive \
-    PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PATH=/opt/venv/bin:$PATH \
     MAX_DIM=512 \
     PORT=10000
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 python3-venv ca-certificates \
-    && rm -rf /var/lib/apt/lists/* \
-    && python3 -m venv /opt/venv
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /srv/app
-COPY requirements.txt .
-RUN pip install -r requirements.txt
+COPY --from=builder /build/target/release/vision-snapshot /usr/local/bin/vision-snapshot
+COPY --from=builder /build/target/release/vision-healthcheck /usr/local/bin/vision-healthcheck
 
 COPY --from=models /models /models
 
-COPY main.py index.html start.sh healthcheck.py ./
+COPY index.html start.sh ./
 COPY static ./static
 RUN chmod +x start.sh
 
 # Docker runs this every 30 s. It logs each result to `docker logs` and marks the container healthy/unhealthy.
 # The start period gives the model time to load before failures count.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=180s --retries=3 \
-  CMD ["python", "/srv/app/healthcheck.py"]
+  CMD ["/usr/local/bin/vision-healthcheck"]
 
 EXPOSE 10000
 ENTRYPOINT ["/srv/app/start.sh"]

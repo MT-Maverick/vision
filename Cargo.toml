@@ -1,0 +1,25 @@
+[package]
+name = "vision-snapshot"
+version = "3.0.0"
+edition = "2021"
+
+[[bin]]
+name = "vision-snapshot"
+path = "src/main.rs"
+
+[[bin]]
+name = "vision-healthcheck"
+path = "src/bin/healthcheck.rs"
+
+[dependencies]
+axum = { version = "0.7", features = ["ws"] }
+base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp"] }
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
+tower-http = { version = "0.5", features = ["fs", "set-header"] }

@@ -24,7 +24,7 @@ The image includes one preset model and its matching projector:
 | `fast` (default) | SmolVLM-500M, smaller and quicker | `docker build -t vision-snapshot .` |
 | `balanced` | Qwen3-VL-2B, larger and more capable | `docker build --build-arg PRESET=balanced -t vision-snapshot .` |
 
-The model is selected at build time. `VISION_MODEL` names the model alias exposed by llama.cpp; changing it at runtime does not replace the model baked into the image.
+The model files are selected at build time. `LLM_MODEL` is the request alias exposed by llama.cpp; changing it at runtime does not replace the model baked into the image.
 
 ## Use the app
 
@@ -38,7 +38,7 @@ Recent results appear along the bottom of the screen.
 
 ## Run without Docker
 
-Install Python 3.10 or later and a llama.cpp build with multimodal support. Download a matching model GGUF and projector GGUF from one of the model repositories listed in the Dockerfile. Start the server with the matching alias; for the default preset:
+Install Rust and a llama.cpp build with multimodal support. Download a matching model GGUF and projector GGUF from one of the model repositories listed in the Dockerfile. Start the server with the matching alias; for the default preset:
 
 ```sh
 llama-server \
@@ -50,14 +50,11 @@ llama-server \
 	--ctx-size 4096
 ```
 
-In a second terminal, install and start the web app:
+In a second terminal, start the Rust web app:
 
 ```sh
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-LLAMA_SERVER_URL=http://127.0.0.1:8080 VISION_MODEL=SmolVLM-500M \
-	uvicorn main:app --host 0.0.0.0 --port 10000
+LLM_BASE_URL=http://127.0.0.1:8080/v1 LLM_MODEL=SmolVLM-500M \
+	cargo run --release
 ```
 
 Open [http://localhost:10000](http://localhost:10000).
@@ -66,14 +63,13 @@ Open [http://localhost:10000](http://localhost:10000).
 
 | Setting | Default | Description |
 | --- | --- | --- |
-| `LLAMA_SERVER_URL` | `http://127.0.0.1:8080` | llama.cpp server URL. |
-| `VISION_MODEL` | Set from the baked preset | Model alias used for llama.cpp requests. |
+| `LLM_BASE_URL` | `http://127.0.0.1:8080/v1` | llama.cpp OpenAI-compatible API URL. |
+| `LLM_HEALTH_URL` | `http://127.0.0.1:8080/health` | llama.cpp health endpoint. |
+| `LLM_MODEL` | Set from the baked preset | Model alias used for llama.cpp requests. |
 | `PORT` | `10000` | Web app port. |
-| `LLAMA_PORT` | `8080` | Internal llama.cpp server port in the container. |
-| `NUM_CTX` | `4096` | Context size passed to llama.cpp. |
-| `MAX_DIM` | `512` | Maximum server-side frame dimension when optional OpenCV is installed. |
+| `MAX_DIM` | `512` | Maximum server-side frame dimension. |
 | `INFERENCE_TIMEOUT` | `300` seconds | Maximum time allowed for an inference request. |
-| `MERGE_FRAMES` | `0` | Set to `1` to combine answers from multiple frames. |
+| `MAX_CONCURRENT` | `1` | Maximum number of simultaneous model requests. |
 
 ## Location and privacy
 

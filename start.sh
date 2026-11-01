@@ -37,8 +37,7 @@ LLAMA_PID=$!
 export LLM_MODEL="$(cat /models/name.txt 2>/dev/null || echo model)"
 
 # Web app starts straight away so Render sees the port open; it reports "loading" until the model is ready.
-uvicorn main:app --host 0.0.0.0 --port "$PORT" \
-  --proxy-headers --forwarded-allow-ips='*' &
+/usr/local/bin/vision-snapshot &
 APP_PID=$!
 
 trap 'kill "$LLAMA_PID" "$APP_PID" 2>/dev/null' TERM INT
