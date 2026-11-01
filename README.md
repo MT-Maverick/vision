@@ -1,4 +1,4 @@
-# Vision Snapshot
+# Vision-Snapshot
 
 Vision Snapshot uses a local vision model served by [llama.cpp](https://github.com/ggml-org/llama.cpp) to identify or describe what your camera sees. Use a live camera, choose a photo, or let Watch mode look for people and landmarks.
 
