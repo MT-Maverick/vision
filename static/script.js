@@ -11,10 +11,8 @@
 
   const el = Object.fromEntries(
     ["stage","video","still","empty","emptyMsg","retry","dot","conn","pill","result","meta","shutter",
-     "flip","watch","loc","place","speak","card","ask","askBtn","useLast","file","history","model","sources","opts","optsBtn","tPerson","tLandmark"].map((k) => [k, $(k)]));
+     "flip","watch","loc","place","speak","card","ask","askBtn","useLast","file","history","model","opts","optsBtn","tPerson","tLandmark"].map((k) => [k, $(k)]));
   const opts = { mode: "identify", frames: 1 };
-  const allowedSkills = ["explain", "ocr", "translate", "web_search"];
-  const skills = new Set(["explain", "ocr", "translate"]);
   const targets = { person: true, landmark: true };
 
   let ws, stream, facing = "environment", busy = false, pending = null, nextId = 1, retries = 0;
@@ -137,9 +135,25 @@
     el.stage.classList.toggle("looking", b || scouting);
     el.shutter.disabled = b;
   }
-  function show(text, kind = "", meta = "") {
+  function show(text, kind = "", meta = "", sources = []) {
     el.result.textContent = text;
     el.result.className = "result " + (kind || (text.length > 40 ? "long" : ""));
+    const links = sources.flatMap((source) => {
+      try {
+        const url = new URL(source.url);
+        if (!["http:", "https:"].includes(url.protocol)) return [];
+        const link = document.createElement("a");
+        link.href = url.href;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.textContent = source.title || url.hostname;
+        return [link];
+      } catch {
+        return [];
+      }
+    });
+    el.sources.replaceChildren(...links);
+    el.sources.hidden = links.length === 0;
     el.meta.textContent = meta;
     el.sources.replaceChildren();
     el.sources.hidden = true;
@@ -162,7 +176,7 @@
     const place = el.place.value.trim();
     const location = !place && locOn ? await getLoc() : null;
     pending = { id: nextId++, thumb, frame: images[0], question, mode: question ? "ask" : opts.mode, gps: location ? location.accuracy : null };
-    ws.send(JSON.stringify({ id: pending.id, mode: pending.mode, question, photo_context: photoContext, images, location, place, skills: [...skills] }));
+    ws.send(JSON.stringify({ id: pending.id, mode: pending.mode, question, images, location, place }));
   }
 
   async function captureFrames() {
@@ -215,10 +229,8 @@
       const acc = p.gps != null ? `±${fmtDist(p.gps)}` : "";
       const base = [m.location_name, acc, when].filter(Boolean).join(" · ");
       const meta = p.question ? `Q: ${p.question} · ${base}` : base;
-      const sources = Array.isArray(m.sources) ? m.sources.filter((s) => s && typeof s.title === "string" && typeof s.url === "string") : [];
-      shown = { thumb: p.thumb, frame: p.frame, label: m.label, meta, base, sources };
+      shown = { thumb: p.thumb, frame: p.frame, label: m.label, meta, base };
       show(m.label, "", meta);
-      renderSources(sources);
       history.unshift(shown);
       speak(m.label, p.mode);
       history.length = Math.min(history.length, MAX_HISTORY);
@@ -373,7 +385,7 @@
       b.append(img);
       b.setAttribute("aria-label", `Show result: ${h.label}`);
       if (i === active) b.setAttribute("aria-current", "true");
-      b.onclick = () => { shown = h; show(h.label, "", h.meta); renderSources(h.sources || []); renderHistory(i); };
+      b.onclick = () => { shown = h; show(h.label, "", h.meta); renderHistory(i); };
       li.append(b);
       return li;
     }));
@@ -385,23 +397,6 @@
     opts[g] = g === "frames" ? Number(b.dataset.value) : b.dataset.value;
     document.querySelectorAll(`[data-group="${g}"]`).forEach((x) => x.setAttribute("aria-pressed", x === b));
   }));
-  try {
-    const savedSkills = JSON.parse(localStorage.getItem("skills") || "null");
-    if (Array.isArray(savedSkills)) {
-      skills.clear();
-      savedSkills.filter((skill) => allowedSkills.includes(skill)).forEach((skill) => skills.add(skill));
-    }
-  } catch {}
-  document.querySelectorAll(".seg button[data-skill]").forEach((button) => {
-    const skill = button.dataset.skill;
-    button.setAttribute("aria-pressed", skills.has(skill));
-    button.onclick = () => {
-      if (skills.has(skill)) skills.delete(skill);
-      else skills.add(skill);
-      button.setAttribute("aria-pressed", skills.has(skill));
-      try { localStorage.setItem("skills", JSON.stringify([...skills])); } catch {}
-    };
-  });
   [["tPerson", "person"], ["tLandmark", "landmark"]].forEach(([id, k]) => {
     el[id].onclick = () => { targets[k] = !targets[k]; el[id].setAttribute("aria-pressed", targets[k]); };
   });

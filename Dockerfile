@@ -13,16 +13,15 @@ RUN cargo build --release --locked
 FROM debian:stable-slim AS models
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
-# Pick the model with --build-arg PRESET=fast|balanced (default: fast).
-#   fast      SmolVLM-256M, about 0.3 GB. Smallest and quickest, but less reliable on difficult images.
+# Pick the model with --build-arg PRESET=fast|balanced (default: balanced).
+#   fast      SmolVLM-500M, about 0.55 GB. Quickest, but short and shallow answers.
 #   balanced  Qwen3-VL-2B (4-bit), about 1.55 GB. Follows instructions much better; slower and needs more memory.
 ARG PRESET=fast
-
 WORKDIR /models
 RUN case "$PRESET" in \
-      fast)     REPO=ggml-org/SmolVLM-256M-Instruct-GGUF; LM=SmolVLM-256M-Instruct-Q8_0.gguf; PROJ=mmproj-SmolVLM-256M-Instruct-Q8_0.gguf; NAME=SmolVLM-256M ;; \
+      fast)     REPO=ggml-org/SmolVLM-500M-Instruct-GGUF; LM=SmolVLM-500M-Instruct-Q8_0.gguf; PROJ=mmproj-SmolVLM-500M-Instruct-Q8_0.gguf; NAME=SmolVLM-500M ;; \
       balanced) REPO=Qwen/Qwen3-VL-2B-Instruct-GGUF; LM=Qwen3VL-2B-Instruct-Q4_K_M.gguf; PROJ=mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf; NAME=Qwen3-VL-2B ;; \
-      *) echo "Unknown PRESET '$PRESET' (use fast or balanced)"; exit 1 ;; \
+      *) echo "Unknown PRESET '$PRESET' (use tiny, fast, or balanced)"; exit 1 ;; \
     esac \
  && curl -fL --retry 3 -o model.gguf  "https://huggingface.co/$REPO/resolve/main/$LM" \
  && curl -fL --retry 3 -o mmproj.gguf "https://huggingface.co/$REPO/resolve/main/$PROJ" \
@@ -33,6 +32,7 @@ FROM ${LLAMA_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive \
     MAX_DIM=512 \
+    LLAMA_CTX=8192 \
     PORT=10000
 
 RUN apt-get update \

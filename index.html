@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>Vision Snapshot</title>
-<link rel="stylesheet" href="/static/style.css?v=3">
+<link rel="stylesheet" href="/static/style.css?v=5">
 </head>
 <body>
 <div class="app" id="stage">
@@ -39,14 +39,6 @@
       <button data-group="mode" data-value="funny" aria-pressed="false">Joke</button>
       <button data-group="mode" data-value="funfact" aria-pressed="false">Fun fact</button>
     </div>
-    <p class="label">Assistant skills</p>
-    <div class="seg wrap skills" role="group" aria-label="Assistant skills">
-      <button data-skill="explain" aria-pressed="true">Explain the identified object</button>
-      <button data-skill="ocr" aria-pressed="true">Read visible text (OCR)</button>
-      <button data-skill="translate" aria-pressed="true">Translate text to English</button>
-      <button data-skill="web_search" aria-pressed="false">Search the web about this image</button>
-    </div>
-    <p class="foot">Uses the local image description and your question to query DuckDuckGo. The image is not sent to DuckDuckGo; its Instant Answer API may return limited results.</p>
     <button class="chip" id="speak" aria-pressed="false">Read answers aloud</button>
     <div class="seg" role="group" aria-label="Frames">
       <button data-group="frames" data-value="1" aria-pressed="true">One frame</button>
@@ -70,6 +62,7 @@
     <ol class="history" id="history" aria-label="Recent results" hidden></ol>
     <div class="readout glass" aria-live="polite">
       <p class="result idle" id="result">Point at something and press the shutter, or ask a question below.</p>
+      <div class="sources" id="sources" aria-label="Web sources" hidden></div>
       <p class="meta" id="meta"></p>
       <div class="sources" id="sources" hidden aria-label="Web sources"></div>
       <button class="chip small" id="card" hidden>Save as card</button>
@@ -86,6 +79,6 @@
     </div>
   </footer>
 </div>
-<script src="/static/script.js?v=3"></script>
+<script src="/static/script.js?v=5"></script>
 </body>
 </html>
