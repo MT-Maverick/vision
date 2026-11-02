@@ -27,11 +27,11 @@ if command -v ldd >/dev/null && ldd /app/llama-server 2>&1 | grep -q "not found"
   exit 1
 fi
 
-echo "Starting the model server (threads=${LLAMA_THREADS:-1}, context=${LLAMA_CTX:-4096}) ..."
+echo "Starting the model server (threads=${LLAMA_THREADS:-1}, context=${LLAMA_CTX:-8192}) ..."
 # Run from /app like the official image does; the subshell keeps the web app's folder unchanged.
 ( cd /app && exec /app/llama-server -m /models/model.gguf --mmproj /models/mmproj.gguf \
     --port 8080 \
-    -c "${LLAMA_CTX:-4096}" -t "${LLAMA_THREADS:-1}" -np 1 ${LLAMA_EXTRA_ARGS:-} ) &
+    -c "${LLAMA_CTX:-8192}" -t "${LLAMA_THREADS:-1}" -np 1 ${LLAMA_EXTRA_ARGS:-} ) &
 LLAMA_PID=$!
 
 export LLM_MODEL="$(cat /models/name.txt 2>/dev/null || echo model)"

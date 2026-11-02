@@ -1,4 +1,4 @@
-# Vision-Snapshot
+# Vision Snapshot
 
 Vision Snapshot uses a local vision model served by [llama.cpp](https://github.com/ggml-org/llama.cpp) to identify or describe what your camera sees. Use a live camera, choose a photo, or let Watch mode look for people and landmarks.
 
@@ -11,7 +11,7 @@ docker build -t vision-snapshot .
 docker run --rm -p 10000:10000 vision-snapshot
 ```
 
-The default `fast` preset downloads SmolVLM-500M and its vision projector during the build. The first build can take a few minutes. Open [http://localhost:10000](http://localhost:10000) after the container starts.
+The default `fast` preset downloads SmolVLM-256M and its vision projector during the build. This is a smaller, faster model, but it can be less reliable on difficult images. The first build can take a few minutes. Open [http://localhost:10000](http://localhost:10000) after the container starts.
 
 Camera access works on `localhost` over HTTP. For other devices or hostnames, use HTTPS. If live camera access is unavailable, choose **Options** and take or select a photo.
 
@@ -21,7 +21,7 @@ The image includes one preset model and its matching projector:
 
 | Preset | Model | Build command |
 | --- | --- | --- |
-| `fast` (default) | SmolVLM-500M, smaller and quicker | `docker build -t vision-snapshot .` |
+| `fast` (default) | SmolVLM-256M, smallest and quickest | `docker build -t vision-snapshot .` |
 | `balanced` | Qwen3-VL-2B, larger and more capable | `docker build --build-arg PRESET=balanced -t vision-snapshot .` |
 
 The model files are selected at build time. `LLM_MODEL` is the request alias exposed by llama.cpp; changing it at runtime does not replace the model baked into the image.
@@ -30,9 +30,11 @@ The model files are selected at build time. `LLM_MODEL` is the request alias exp
 
 1. Allow camera access when prompted. Use **Flip** to switch between front and rear cameras.
 2. Press the shutter to analyze the current view. In **Options**, choose **Name it** for a short label or **Describe it** for a brief description.
-3. Choose **Burst of 4** to analyze several frames from a short camera clip.
-4. Turn on **Watch** to check for selected people or landmarks and analyze the view when one is spotted.
-5. Location is optional. Enable it for browser GPS, or enter a place in **Options**. A typed place overrides GPS.
+3. Use the **Assistant skills** toggles in **Options** to explain an identified object, read visible text, translate text to English, or search the web for supporting facts. Skills are saved in this browser; web search is off by default.
+4. When web search is enabled, the server searches DuckDuckGo using the model's text identification and optional question, then shows source links with the answer. Camera images are sent only to the configured model server, never to DuckDuckGo. Search requires internet access and may be blocked by DuckDuckGo's bot protection.
+5. Choose **Burst of 4** to analyze several frames from a short camera clip.
+6. Turn on **Watch** to check for selected people or landmarks and analyze the view when one is spotted.
+7. Location is optional. Enable it for browser GPS, or enter a place in **Options**. A typed place overrides GPS.
 
 Recent results appear along the bottom of the screen.
 
@@ -42,9 +44,9 @@ Install Rust and a llama.cpp build with multimodal support. Download a matching 
 
 ```sh
 llama-server \
-	--model /path/to/SmolVLM-500M-Instruct-Q8_0.gguf \
-	--mmproj /path/to/mmproj-SmolVLM-500M-Instruct-Q8_0.gguf \
-	--alias SmolVLM-500M \
+	--model /path/to/SmolVLM-256M-Instruct-Q8_0.gguf \
+	--mmproj /path/to/mmproj-SmolVLM-256M-Instruct-Q8_0.gguf \
+	--alias SmolVLM-256M \
 	--host 127.0.0.1 \
 	--port 8080 \
 	--ctx-size 4096
@@ -53,7 +55,7 @@ llama-server \
 In a second terminal, start the Rust web app:
 
 ```sh
-LLM_BASE_URL=http://127.0.0.1:8080/v1 LLM_MODEL=SmolVLM-500M \
+LLM_BASE_URL=http://127.0.0.1:8080/v1 LLM_MODEL=SmolVLM-256M \
 	cargo run --release
 ```
 
@@ -73,4 +75,4 @@ Open [http://localhost:10000](http://localhost:10000).
 
 ## Location and privacy
 
-Camera frames are sent to the llama.cpp server configured for the app. In the Docker setup, llama.cpp runs locally in the same container. Location is off by default; enabling it asks the browser for GPS permission and uses a geocoding service to turn coordinates into a place name. A manually entered place is sent to the model as context.
+Camera frames are sent to the llama.cpp server configured for the app. In the Docker setup, llama.cpp runs locally in the same container. When web search is enabled, only a text query and retrieved result snippets are sent to DuckDuckGo and the local model; camera frames are not sent to the search provider. DuckDuckGo's public HTML search endpoint may block automated requests, in which case the app reports the error and web search can be turned off in Options. Location is off by default; enabling it asks the browser for GPS permission and uses a geocoding service to turn coordinates into a place name. A manually entered place is sent to the model as context.

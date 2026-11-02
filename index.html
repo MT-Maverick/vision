@@ -39,6 +39,14 @@
       <button data-group="mode" data-value="funny" aria-pressed="false">Joke</button>
       <button data-group="mode" data-value="funfact" aria-pressed="false">Fun fact</button>
     </div>
+    <p class="label">Assistant skills</p>
+    <div class="seg wrap skills" role="group" aria-label="Assistant skills">
+      <button data-skill="explain" aria-pressed="true">Explain the identified object</button>
+      <button data-skill="ocr" aria-pressed="true">Read visible text (OCR)</button>
+      <button data-skill="translate" aria-pressed="true">Translate text to English</button>
+      <button data-skill="web_search" aria-pressed="false">Find image matches with Google Lens</button>
+    </div>
+    <p class="foot">Image search sends the photo to SerpApi for Google Lens matching. Search is off until enabled.</p>
     <button class="chip" id="speak" aria-pressed="false">Read answers aloud</button>
     <div class="seg" role="group" aria-label="Frames">
       <button data-group="frames" data-value="1" aria-pressed="true">One frame</button>
@@ -63,6 +71,7 @@
     <div class="readout glass" aria-live="polite">
       <p class="result idle" id="result">Point at something and press the shutter, or ask a question below.</p>
       <p class="meta" id="meta"></p>
+      <div class="sources" id="sources" hidden aria-label="Web sources"></div>
       <button class="chip small" id="card" hidden>Save as card</button>
       <div class="ask">
         <input id="ask" type="text" maxlength="300" placeholder="Ask about this view…" enterkeyhint="send" autocomplete="off" aria-label="Ask a question about the view">
