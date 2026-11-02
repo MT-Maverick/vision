@@ -759,71 +759,134 @@ async fn search_web(
     Ok(results)
 }
 
-fn parse_search_results(body: &str) -> Result<Vec<SearchResult>, String> {
-    if body.contains("anomaly-modal") || body.contains("challenge-form") {
-        return Err(
-            "DuckDuckGo blocked this server's search request. Turn off web search and try again."
-                .to_owned(),
-        );
-    }
-
-    let document = Html::parse_document(&body);
-    let result_selector = Selector::parse(".result").expect("constant selector");
-    let title_selector = Selector::parse(".result__a").expect("constant selector");
-    let snippet_selector = Selector::parse(".result__snippet").expect("constant selector");
-    let results = document
-        .select(&result_selector)
-        .filter_map(|result| {
-            let title_element = result.select(&title_selector).next()?;
-            let title = title_element.text().collect::<String>().trim().to_owned();
-            let url = resolve_search_url(title_element.value().attr("href")?)?;
-            let snippet = result
-                .select(&snippet_selector)
-                .next()
-                .map(|element| element.text().collect::<String>().trim().to_owned())
-                .unwrap_or_default();
-            if title.is_empty() || snippet.is_empty() {
-                return None;
+fn prepare_lens_upload(frame: &str) -> Result<Vec<u8>, String> {
+    let bytes = STANDARD
+        .decode(frame)
+        .map_err(|error| format!("Couldn't decode the image for Google Lens: {error}"))?;
+    let image = image::load_from_memory(&bytes)
+        .map_err(|error| format!("Couldn't read the image for Google Lens: {error}"))?;
+    for max_dim in [512, 384, 256, 192] {
+        let resized = if image.width().max(image.height()) > max_dim {
+            image.resize(max_dim, max_dim, FilterType::Triangle)
+        } else {
+            image.clone()
+        };
+        for quality in [80, 65, 50] {
+            let mut jpeg = Vec::new();
+            JpegEncoder::new_with_quality(&mut jpeg, quality)
+                .encode_image(&resized)
+                .map_err(|error| format!("Couldn't encode the image for Google Lens: {error}"))?;
+            if jpeg.len() <= SERPAPI_MAX_IMAGE_BYTES {
+                return Ok(jpeg);
             }
-            Some(SearchResult {
-                title: title.chars().take(180).collect(),
+        }
+    }
+    Err("Image is too large to upload for Google Lens search.".to_owned())
+}
+
+async fn read_serpapi_json(
+    response: reqwest::Response,
+    api_key: &str,
+    operation: &str,
+) -> Result<Value, String> {
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|_| format!("Couldn't read the SerpApi {operation} response (HTTP {status})."))?;
+    let data: Value = serde_json::from_str(&body).map_err(|_| {
+        format!("SerpApi returned an invalid response for {operation} (HTTP {status}).")
+    })?;
+    if !status.is_success() || data.get("error").is_some() {
+        return Err(serpapi_error(&data, status, api_key, operation));
+    }
+    Ok(data)
+}
+
+fn serpapi_error(
+    data: &Value,
+    status: ReqwestStatusCode,
+    api_key: &str,
+    operation: &str,
+) -> String {
+    let detail = data
+        .get("error")
+        .and_then(Value::as_str)
+        .or_else(|| data.pointer("/error/message").and_then(Value::as_str))
+        .map(|message| message.chars().take(240).collect::<String>())
+        .unwrap_or_else(|| format!("HTTP {status}"));
+    let detail = if api_key.is_empty() {
+        detail
+    } else {
+        detail.replace(api_key, "[redacted]")
+    };
+    format!("SerpApi {operation} failed: {detail}")
+}
+
+fn parse_lens_results(data: &Value) -> Result<Vec<SearchResult>, String> {
+    let mut seen = HashSet::new();
+    let mut results = Vec::new();
+    for section in ["exact_matches", "visual_matches"] {
+        let Some(matches) = data.get(section).and_then(Value::as_array) else {
+            continue;
+        };
+        for item in matches {
+            let Some(url) = item
+                .get("link")
+                .or_else(|| item.get("url"))
+                .and_then(Value::as_str)
+                .and_then(resolve_lens_url)
+            else {
+                continue;
+            };
+            if !seen.insert(url.clone()) {
+                continue;
+            }
+            let title = item
+                .get("title")
+                .and_then(Value::as_str)
+                .or_else(|| item.get("source").and_then(Value::as_str))
+                .unwrap_or("Visual match")
+                .chars()
+                .take(180)
+                .collect::<String>();
+            let snippet = item
+                .get("snippet")
+                .or_else(|| item.get("description"))
+                .or_else(|| item.get("source"))
+                .and_then(Value::as_str)
+                .unwrap_or("Google Lens found a visual match for this image.")
+                .chars()
+                .take(400)
+                .collect();
+            results.push(SearchResult {
+                title,
                 url,
-                snippet: snippet.chars().take(400).collect(),
-            })
-        })
-        .take(3)
-        .collect::<Vec<_>>();
+                snippet,
+            });
+            if results.len() == 6 {
+                break;
+            }
+        }
+        if results.len() == 6 {
+            break;
+        }
+    }
     if results.is_empty() {
-        return Err(
-            "DuckDuckGo returned no usable web results. Try again or turn off web search."
-                .to_owned(),
-        );
+        return Err("Google Lens returned no visual matches.".to_owned());
     }
     Ok(results)
 }
 
-fn resolve_search_url(href: &str) -> Option<String> {
-    let href = if href.starts_with("//") {
-        format!("https:{href}")
-    } else {
-        href.to_owned()
-    };
-    let parsed = reqwest::Url::parse(&href).ok()?;
-    let target = if parsed.host_str() == Some("duckduckgo.com") && parsed.path() == "/l/" {
-        parsed
-            .query_pairs()
-            .find_map(|(key, value)| (key == "uddg").then(|| value.into_owned()))?
-    } else {
-        href
-    };
-    let target = reqwest::Url::parse(&target).ok()?;
-    if !matches!(target.scheme(), "http" | "https")
-        || !target.username().is_empty()
-        || target.password().is_some()
+fn resolve_lens_url(href: &str) -> Option<String> {
+    let url = reqwest::Url::parse(href).ok()?;
+    if !matches!(url.scheme(), "http" | "https")
+        || !url.username().is_empty()
+        || url.password().is_some()
     {
         return None;
     }
-    Some(target.to_string())
+    Some(url.to_string())
 }
 
 fn build_web_prompt(
@@ -974,6 +1037,8 @@ const SCOUT_TARGETS: &[(&str, &str)] = &[
 ];
 
 async fn run_scout(socket: &mut WebSocket, state: &AppState, message: &Value) {
+    let request_id = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
+    let started = Instant::now();
     let id = message.get("id").cloned().unwrap_or(Value::Null);
     let targets: Vec<_> = message
         .get("targets")
@@ -1022,7 +1087,7 @@ async fn run_scout(socket: &mut WebSocket, state: &AppState, message: &Value) {
         descriptions.join("; "),
         options.join(", ")
     );
-    match ask_model(state, &prompt, &frames[..1], "scout", &[]).await {
+    match ask_model(state, &prompt, &frames[..1], "scout", &[], request_id, "watch-scout").await {
         Ok(text) => {
             let upper = text.to_uppercase();
             let hit = options
@@ -1031,7 +1096,12 @@ async fn run_scout(socket: &mut WebSocket, state: &AppState, message: &Value) {
                 .min_by_key(|(position, _)| *position)
                 .map(|(_, option)| option.to_lowercase())
                 .filter(|hit| targets.contains(&hit.as_str()));
-            println!("Scout: {}", hit.as_deref().unwrap_or("nothing"));
+            if let Some(hit) = hit {
+                println!(
+                    "request={request_id} watch_scout=hit target={hit} elapsed_ms={}",
+                    started.elapsed().as_millis()
+                );
+            }
             let _ = socket
                 .send(Message::Text(
                     send_scout("success", hit.as_deref()).to_string(),
@@ -1039,7 +1109,7 @@ async fn run_scout(socket: &mut WebSocket, state: &AppState, message: &Value) {
                 .await;
         }
         Err(error) => {
-            println!("Scout failed: {error}");
+            eprintln!("request={request_id} watch_scout=error elapsed_ms={} detail={error}", started.elapsed().as_millis());
             let _ = socket
                 .send(Message::Text(send_scout("error", None).to_string()))
                 .await;
@@ -1083,37 +1153,41 @@ mod tests {
     }
 
     #[test]
-    fn search_redirects_allow_only_safe_web_urls() {
-        assert_eq!(
-            resolve_search_url("//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fpage"),
-            Some("https://example.com/page".to_owned())
-        );
-        assert_eq!(resolve_search_url("javascript:alert(1)"), None);
-        assert_eq!(
-            resolve_search_url("https://user:password@example.com/"),
-            None
-        );
+    fn image_search_results_extract_matches_and_reject_unsafe_urls() {
+        let data = json!({
+            "exact_matches": [
+                { "title": "Exact result", "link": "https://example.com/exact", "source": "Example" }
+            ],
+            "visual_matches": [
+                { "title": "Visual result", "link": "https://example.com/visual", "snippet": "Image match" },
+                { "title": "Unsafe link", "link": "javascript:alert(1)" }
+            ]
+        });
+        let results = parse_lens_results(&data).unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].title, "Exact result");
+        assert_eq!(results[0].url, "https://example.com/exact");
+        assert_eq!(results[1].snippet, "Image match");
     }
 
     #[test]
-    fn search_results_extract_titles_snippets_and_links() {
-        let html = r#"
-            <div class="result">
-              <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fpage">Reference title</a>
-              <a class="result__snippet">A short supporting excerpt.</a>
-            </div>
-        "#;
-        let results = parse_search_results(html).unwrap();
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].title, "Reference title");
-        assert_eq!(results[0].url, "https://example.com/page");
-        assert_eq!(results[0].snippet, "A short supporting excerpt.");
+    fn lens_urls_reject_non_web_schemes_and_credentials() {
+        assert_eq!(
+            resolve_lens_url("https://example.com/path"),
+            Some("https://example.com/path".to_owned())
+        );
+        assert_eq!(resolve_lens_url("javascript:alert(1)"), None);
+        assert_eq!(resolve_lens_url("https://user:password@example.com/"), None);
     }
 
     #[test]
-    fn search_challenge_is_reported_as_error() {
-        let error = parse_search_results("<div class='anomaly-modal'></div>").unwrap_err();
-        assert!(error.contains("blocked this server's search request"));
+    fn lens_upload_jpeg_stays_under_api_size_limit() {
+        let mut bytes = Vec::new();
+        JpegEncoder::new_with_quality(&mut bytes, 90)
+            .encode_image(&image::DynamicImage::new_rgb8(256, 256))
+            .unwrap();
+        let uploaded = prepare_lens_upload(&STANDARD.encode(bytes)).unwrap();
+        assert!(uploaded.len() <= SERPAPI_MAX_IMAGE_BYTES);
     }
 
     #[test]
