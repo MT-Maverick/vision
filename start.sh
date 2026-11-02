@@ -47,7 +47,6 @@ trap 'STOP_SIGNAL=INT' INT
 EXITED_PID=
 wait -n -p EXITED_PID "$LLAMA_PID" "$APP_PID"
 code=$?
-
 if [ -n "$STOP_SIGNAL" ]; then
   echo "Received SIG$STOP_SIGNAL; stopping child processes."
   kill -TERM "$LLAMA_PID" "$APP_PID" 2>/dev/null || :
