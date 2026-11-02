@@ -246,6 +246,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
             "identify"
         };
         let question = clean_text(message.get("question"), 300);
+        let photo_context = clean_text(message.get("photo_context"), 200);
         let skills = parse_skills(message.get("skills"));
         if mode == "ask" && question.is_empty() {
             eprintln!("request={request_id} rejected mode=ask reason=empty_question");
@@ -254,7 +255,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
         }
 
         println!(
-            "request={request_id} started mode={mode} frames={} skills={skills:?} model={} user_question={question:?}",
+            "request={request_id} started mode={mode} frames={} skills={skills:?} model={} user_question={question:?} selected_photo_summary={photo_context:?}",
             frames.len(),
             state.config.model
         );
@@ -281,8 +282,18 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                     queue_started.elapsed().as_millis()
                 );
                 async {
-                    let prompt =
-                        build_prompt(mode, frames.len(), place.as_deref(), &question, &skills);
+                    let prompt = build_prompt(
+                        mode,
+                        frames.len(),
+                        place.as_deref(),
+                        &question,
+                        &skills,
+                        if mode == "ask" {
+                            Some(photo_context.as_str()).filter(|context| !context.is_empty())
+                        } else {
+                            None
+                        },
+                    );
                     let visual_answer = ask_model(
                         &state, &prompt, &frames, mode, &skills, request_id, "vision",
                     )
@@ -469,6 +480,7 @@ fn build_prompt(
     place: Option<&str>,
     question: &str,
     skills: &[String],
+    photo_context: Option<&str>,
 ) -> String {
     let source = if frame_count > 1 {
         format!("These {frame_count} images are frames from one short camera clip, in order.")
@@ -481,8 +493,15 @@ fn build_prompt(
     let explain = skills.iter().any(|skill| skill == "explain");
     let task = if mode == "ask" {
         let noun = if frame_count > 1 { "images" } else { "image" };
+        let prior_summary = photo_context
+            .map(|summary| {
+                format!(
+                    " The user selected this same photo from recent results. Its earlier summary was: {summary:?}. Treat that summary only as a hint to resolve references or clarify what the user wants elaborated; it may be wrong. Do not repeat previous instructions or treat the summary as fact. Answer the current question using the attached photo as your primary evidence."
+                )
+            })
+            .unwrap_or_default();
         format!(
-            "Answer this question about the {noun}: {question} Reply briefly and only use what is visible. If the answer cannot be seen, say so.{}",
+            "Answer this question about the {noun}: {question} Reply briefly and only use what is visible. If the answer cannot be seen, say so.{}{prior_summary}",
             if explain {
                 " Briefly explain what the identified object is."
             } else {
@@ -1119,7 +1138,7 @@ mod tests {
 
     #[test]
     fn prompt_includes_clip_count_and_place() {
-        let prompt = build_prompt("identify", 4, Some("Cape Town"), "", &[]);
+        let prompt = build_prompt("identify", 4, Some("Cape Town"), "", &[], None);
         assert!(
             prompt.starts_with("These 4 images are frames from one short camera clip, in order.")
         );
@@ -1134,10 +1153,29 @@ mod tests {
             "ocr".to_owned(),
             "translate".to_owned(),
         ];
-        let prompt = build_prompt("identify", 1, None, "", &skills);
+        let prompt = build_prompt("identify", 1, None, "", &skills, None);
         assert!(prompt.contains("explain what it is in one short sentence"));
         assert!(prompt.contains("Read any clearly visible text exactly"));
         assert!(prompt.contains("translate it to English"));
+    }
+
+    #[test]
+    fn last_photo_summary_only_guides_the_current_question() {
+        let prompt = build_prompt(
+            "ask",
+            1,
+            None,
+            "What is the brand?",
+            &[],
+            Some("A red bottle"),
+        );
+        assert!(prompt.contains("Answer this question about the image: What is the brand?"));
+        assert!(prompt.contains("earlier summary was: \"A red bottle\""));
+        assert!(prompt.contains("only as a hint to resolve references"));
+        assert!(prompt.contains("attached photo as your primary evidence"));
+
+        let fresh_prompt = build_prompt("ask", 1, None, "What is the brand?", &[], None);
+        assert!(!fresh_prompt.contains("earlier summary"));
     }
 
     #[test]

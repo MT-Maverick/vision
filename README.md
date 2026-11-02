@@ -36,6 +36,8 @@ The model files are selected at build time. `LLM_MODEL` is the request alias exp
 6. Turn on **Watch** to check for selected people or landmarks and analyze the view when one is spotted.
 7. Location is optional. Enable it for browser GPS, or enter a place in **Options**. A typed place overrides GPS.
 
+When **Ask about the last photo instead** is enabled, the app sends that photo's previous answer only as a hint for resolving references or clarifying what you want elaborated. The model still receives the photo and current question, and must verify its answer against the image; prior questions and other conversation history are not included.
+
 Recent results appear along the bottom of the screen.
 
 ### Web search limitations

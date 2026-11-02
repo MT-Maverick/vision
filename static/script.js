@@ -152,7 +152,7 @@
     el.stage.classList.toggle("looking", busy || scouting);
   }
 
-  async function send(images, thumb, question = "") {
+  async function send(images, thumb, question = "", photoContext = "") {
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       show("Not connected to the server yet. Try again in a moment.", "error");
       setBusy(false);
@@ -162,7 +162,7 @@
     const place = el.place.value.trim();
     const location = !place && locOn ? await getLoc() : null;
     pending = { id: nextId++, thumb, frame: images[0], question, mode: question ? "ask" : opts.mode, gps: location ? location.accuracy : null };
-    ws.send(JSON.stringify({ id: pending.id, mode: pending.mode, question, images, location, place, skills: [...skills] }));
+    ws.send(JSON.stringify({ id: pending.id, mode: pending.mode, question, photo_context: photoContext, images, location, place, skills: [...skills] }));
   }
 
   async function captureFrames() {
@@ -188,9 +188,12 @@
     const question = el.ask.value.trim();
     if (!question || busy) return;
     window.speechSynthesis?.cancel();
+    const useLastPhoto = el.useLast.getAttribute("aria-pressed") === "true" && shown?.frame;
     let images, thumb;
-    if (el.useLast.getAttribute("aria-pressed") === "true" && shown?.frame) {
+    let photoContext = "";
+    if (useLastPhoto) {
       images = [shown.frame]; thumb = shown.thumb;
+      photoContext = shown.label;
     } else if (!el.still.hidden) {
       images = [el.still.src]; thumb = el.still.src;
     } else if (!cameraLive()) {
@@ -200,7 +203,7 @@
     setBusy(true);
     if (!images) ({ images, thumb } = await captureFrames());
     el.ask.value = "";
-    send(images, thumb, question);
+    send(images, thumb, question, photoContext);
   }
 
   function finish(m) {
