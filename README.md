@@ -30,8 +30,8 @@ The model files are selected at build time. `LLM_MODEL` is the request alias exp
 
 1. Allow camera access when prompted. Use **Flip** to switch between front and rear cameras.
 2. Press the shutter to analyze the current view. In **Options**, choose **Name it** for a short label or **Describe it** for a brief description.
-3. Use the **Assistant skills** toggles in **Options** to explain an identified object, read visible text, translate text to English, or search the web for supporting facts. Skills are saved in this browser; web search is off by default.
-4. When web search is enabled, the server searches DuckDuckGo using the model's text identification and optional question, then shows source links with the answer. Camera images are sent only to the configured model server, never to DuckDuckGo. Search requires internet access and may be blocked by DuckDuckGo's bot protection.
+3. Use the **Assistant skills** toggles in **Options** to explain an identified object, read visible text, translate text to English, or find image matches with Google Lens. Skills are saved in this browser; image search is off by default.
+4. When image search is enabled, the server uploads the first frame directly to SerpApi's temporary image-upload endpoint, then asks Google Lens for visual matches and shows source links with the answer. SerpApi expires uploaded image IDs after 10 minutes. The camera image is sent to SerpApi and Google Lens for this feature; configure `SERPAPI_API_KEY` on the server to enable it.
 5. Choose **Burst of 4** to analyze several frames from a short camera clip.
 6. Turn on **Watch** to check for selected people or landmarks and analyze the view when one is spotted.
 7. Location is optional. Enable it for browser GPS, or enter a place in **Options**. A typed place overrides GPS.
@@ -72,7 +72,8 @@ Open [http://localhost:10000](http://localhost:10000).
 | `MAX_DIM` | `512` | Maximum server-side frame dimension. |
 | `INFERENCE_TIMEOUT` | `300` seconds | Maximum time allowed for an inference request. |
 | `MAX_CONCURRENT` | `1` | Maximum number of simultaneous model requests. |
+| `SERPAPI_API_KEY` | unset | SerpApi key required for the opt-in Google Lens image-search skill. Create a key in the [SerpApi dashboard](https://serpapi.com/manage-api-key) and store it as a deployment secret. For Render, add it as the `SERPAPI_API_KEY` environment variable. |
 
 ## Location and privacy
 
-Camera frames are sent to the llama.cpp server configured for the app. In the Docker setup, llama.cpp runs locally in the same container. When web search is enabled, only a text query and retrieved result snippets are sent to DuckDuckGo and the local model; camera frames are not sent to the search provider. DuckDuckGo's public HTML search endpoint may block automated requests, in which case the app reports the error and web search can be turned off in Options. Location is off by default; enabling it asks the browser for GPS permission and uses a geocoding service to turn coordinates into a place name. A manually entered place is sent to the model as context.
+Camera frames are sent to the llama.cpp server configured for the app. In the Docker setup, llama.cpp runs locally in the same container. When Google Lens image search is enabled, the first processed frame is uploaded directly to SerpApi and then used for a Google Lens search; SerpApi says uploaded image IDs expire after 10 minutes. Do not enable this skill for images you do not want sent to these services. Location is off by default; enabling it asks the browser for GPS permission and uses a geocoding service to turn coordinates into a place name. A manually entered place is sent to the model as context.
