@@ -254,7 +254,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
         }
 
         println!(
-            "request={request_id} started mode={mode} frames={} skills={skills:?} model={}",
+            "request={request_id} started mode={mode} frames={} skills={skills:?} model={} user_question={question:?}",
             frames.len(),
             state.config.model
         );
@@ -289,6 +289,13 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                     .await?;
                     if skills.iter().any(|skill| skill == "web_search") {
                         sources = search_web(&state, request_id, &visual_answer, &question).await?;
+                        if sources.is_empty() {
+                            let query = build_search_query(&visual_answer, &question);
+                            sources.push(duckduckgo_search_link(&query));
+                            return Ok(format!(
+                                "{visual_answer}\n\nDuckDuckGo returned no Instant Answer references. Open the search link below for full web results."
+                            ));
+                        }
                         let prompt = build_web_prompt(&visual_answer, &question, &skills, &sources);
                         ask_model(
                             &state,
@@ -673,8 +680,7 @@ async fn search_web(
 ) -> Result<Vec<SearchResult>, String> {
     let query = build_search_query(visual_answer, question);
     println!(
-        "request={request_id} web_search=duckduckgo_instant_answer phase=request_started query_chars={}",
-        query.chars().count()
+        "request={request_id} web_search=duckduckgo_instant_answer phase=request_started query={query:?}"
     );
     let search_started = Instant::now();
     let response = state
@@ -713,11 +719,19 @@ async fn search_web(
     })?;
     let results = parse_duckduckgo_results(&data);
     if results.is_empty() {
+        let abstract_chars = data
+            .get("AbstractText")
+            .and_then(Value::as_str)
+            .map_or(0, str::len);
+        let related_topics = data
+            .get("RelatedTopics")
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len);
         eprintln!(
-            "request={request_id} web_search=duckduckgo_instant_answer phase=completed elapsed_ms={} results=0",
-            search_started.elapsed().as_millis()
+            "request={request_id} web_search=duckduckgo_instant_answer phase=completed http_status={status} elapsed_ms={} results=0 abstract_chars={abstract_chars} related_topics={related_topics}",
+            search_started.elapsed().as_millis(),
         );
-        return Err("DuckDuckGo's Instant Answer API found no results for this query. Try a more specific question.".to_owned());
+        return Ok(results);
     }
     println!(
         "request={request_id} web_search=duckduckgo_instant_answer phase=completed http_status={status} elapsed_ms={} results={}",
@@ -725,6 +739,20 @@ async fn search_web(
         results.len()
     );
     Ok(results)
+}
+
+fn duckduckgo_search_link(query: &str) -> SearchResult {
+    let url = reqwest::Url::parse_with_params("https://duckduckgo.com/", &[("q", query)])
+        .expect("static DuckDuckGo URL is valid");
+    SearchResult {
+        title: format!(
+            "Search DuckDuckGo: {}",
+            query.chars().take(120).collect::<String>()
+        ),
+        url: url.to_string(),
+        snippet: "DuckDuckGo's Instant Answer API had no references. Open this link to see full search results."
+            .to_owned(),
+    }
 }
 
 fn build_search_query(visual_answer: &str, question: &str) -> String {
@@ -1156,6 +1184,17 @@ mod tests {
                 .count()
                 <= 400
         );
+    }
+
+    #[test]
+    fn duckduckgo_search_link_encodes_query() {
+        let link = duckduckgo_search_link("Axe bottle what brand?");
+        let url = reqwest::Url::parse(&link.url).unwrap();
+        assert_eq!(
+            url.query_pairs().find(|(key, _)| key == "q").unwrap().1,
+            "Axe bottle what brand?"
+        );
+        assert!(link.title.contains("Axe bottle what brand?"));
     }
 
     #[test]

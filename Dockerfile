@@ -16,7 +16,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certifi
 # Pick the model with --build-arg PRESET=fast|balanced (default: fast).
 #   fast      SmolVLM-256M, about 0.3 GB. Smallest and quickest, but less reliable on difficult images.
 #   balanced  Qwen3-VL-2B (4-bit), about 1.55 GB. Follows instructions much better; slower and needs more memory.
-ARG PRESET=fast
+ARG PRESET=balanced
+
 WORKDIR /models
 RUN case "$PRESET" in \
       fast)     REPO=ggml-org/SmolVLM-256M-Instruct-GGUF; LM=SmolVLM-256M-Instruct-Q8_0.gguf; PROJ=mmproj-SmolVLM-256M-Instruct-Q8_0.gguf; NAME=SmolVLM-256M ;; \
