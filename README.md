@@ -11,7 +11,7 @@ docker build -t vision-snapshot .
 docker run --rm -p 10000:10000 vision-snapshot
 ```
 
-The default `tiny` preset downloads SmolVLM-256M and its vision projector during the build. The first build can take a few minutes. Open [http://localhost:10000](http://localhost:10000) after the container starts.
+The default `fast` preset downloads SmolVLM-500M and its vision projector during the build. The first build can take a few minutes. Open [http://localhost:10000](http://localhost:10000) after the container starts.
 
 Camera access works on `localhost` over HTTP. For other devices or hostnames, use HTTPS. If live camera access is unavailable, choose **Options** and take or select a photo.
 
@@ -21,8 +21,7 @@ The image includes one preset model and its matching projector:
 
 | Preset | Model | Build command |
 | --- | --- | --- |
-| `tiny` (default) | SmolVLM-256M, smallest and lightest; may be less reliable | `docker build -t vision-snapshot .` |
-| `fast` | SmolVLM-500M, quicker with more capacity | `docker build --build-arg PRESET=fast -t vision-snapshot .` |
+| `fast` (default) | SmolVLM-500M, smaller and quicker | `docker build -t vision-snapshot .` |
 | `balanced` | Qwen3-VL-2B, larger and more capable | `docker build --build-arg PRESET=balanced -t vision-snapshot .` |
 
 The model files are selected at build time. `LLM_MODEL` is the request alias exposed by llama.cpp; changing it at runtime does not replace the model baked into the image.
@@ -31,12 +30,15 @@ The model files are selected at build time. `LLM_MODEL` is the request alias exp
 
 1. Allow camera access when prompted. Use **Flip** to switch between front and rear cameras.
 2. Press the shutter to analyze the current view. In **Options**, choose **Name it** for a short label or **Describe it** for a brief description.
-3. Use **Skills** in **Options** to toggle Wikimedia web lookup, more detailed answers, and reading visible text. Web lookup applies to typed questions; it is enabled by default and can be turned off.
-4. Choose **Burst of 4** to analyze several frames from a short camera clip.
-5. Turn on **Watch** to check for selected people or landmarks and analyze the view when one is spotted.
-6. Location is optional. Enable it for browser GPS, or enter a place in **Options**. A typed place overrides GPS.
+3. Choose **Burst of 4** to analyze several frames from a short camera clip.
+4. Turn on **Watch** to check for selected people or landmarks and analyze the view when one is spotted.
+5. Location is optional. Enable it for browser GPS, or enter a place in **Options**. A typed place overrides GPS.
 
 Recent results appear along the bottom of the screen.
+
+### Web search limitations
+
+The Instant Answer API is not DuckDuckGo's full ranked web search. It often returns no references for specific product or image questions. The app does not retry an empty response; it falls back to the image-based answer and provides a link to DuckDuckGo's full search page. Transient request or server errors are reported normally. No API key is required, but the server needs outbound internet access.
 
 ## Run without Docker
 
@@ -77,4 +79,4 @@ Open [http://localhost:10000](http://localhost:10000).
 
 ## Location and privacy
 
-Camera frames are sent to the llama.cpp server configured for the app. In the Docker setup, llama.cpp runs locally in the same container. When **Web lookup** is enabled, the typed question is sent to the Wikimedia API, which searches English Wikipedia and returns up to three article extracts to the local model as reference material. Camera images are not sent to Wikimedia. Answers include links to the referenced articles. Disable the skill to keep typed questions local. Location is off by default; enabling it asks the browser for GPS permission and uses a geocoding service to turn coordinates into a place name. A manually entered place is sent to the local model as context.
+Camera frames are sent to the llama.cpp server configured for the app. In the Docker setup, llama.cpp runs locally in the same container. Location is off by default; enabling it asks the browser for GPS permission and uses a geocoding service to turn coordinates into a place name. A manually entered place is sent to the model as context.

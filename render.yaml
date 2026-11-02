@@ -1,5 +1,6 @@
 # Render Blueprint. Deploy with: New > Blueprint > pick your repo.
-# The default SmolVLM-256M preset is the smallest available; use PRESET=fast or balanced for larger models.
+# The default model (Qwen3-VL-2B) needs roughly 2-3 GB of RAM, so this uses the Pro plan (4 GB, 2 CPUs).
+# For the lighter SmolVLM-500M, build with PRESET=fast and "standard" (2 GB) should do.
 services:
   - type: web
     name: snapshot

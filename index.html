@@ -39,13 +39,6 @@
       <button data-group="mode" data-value="funny" aria-pressed="false">Joke</button>
       <button data-group="mode" data-value="funfact" aria-pressed="false">Fun fact</button>
     </div>
-    <p class="label">Skills</p>
-    <div class="skills" role="group" aria-label="Optional model skills">
-      <button class="chip" data-skill="web" aria-pressed="true">Web lookup</button>
-      <button class="chip" data-skill="detail" aria-pressed="false">More detail</button>
-      <button class="chip" data-skill="text" aria-pressed="false">Read visible text</button>
-    </div>
-    <p class="foot">Web lookup sends typed questions to the Wikimedia API. Camera images stay local.</p>
     <button class="chip" id="speak" aria-pressed="false">Read answers aloud</button>
     <div class="seg" role="group" aria-label="Frames">
       <button data-group="frames" data-value="1" aria-pressed="true">One frame</button>
@@ -71,12 +64,13 @@
       <p class="result idle" id="result">Point at something and press the shutter, or ask a question below.</p>
       <div class="sources" id="sources" aria-label="Web sources" hidden></div>
       <p class="meta" id="meta"></p>
+      <div class="sources" id="sources" hidden aria-label="Web sources"></div>
       <button class="chip small" id="card" hidden>Save as card</button>
       <div class="ask">
         <input id="ask" type="text" maxlength="300" placeholder="Ask about this view…" enterkeyhint="send" autocomplete="off" aria-label="Ask a question about the view">
         <button class="chip small" id="askBtn">Ask</button>
       </div>
-      <button class="chip small" id="useLast" aria-pressed="false" hidden>Ask about the last photo instead</button>
+      <button class="chip small" id="useLast" aria-pressed="false" aria-label="Ask about the last photo; use its previous answer only as a hint" hidden>Ask about the last photo instead</button>
     </div>
     <div class="controls">
       <button class="chip round" id="flip" aria-label="Switch camera">Flip</button>

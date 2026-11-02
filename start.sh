@@ -31,7 +31,7 @@ echo "Starting the model server (threads=${LLAMA_THREADS:-1}, context=${LLAMA_CT
 # Run from /app like the official image does; the subshell keeps the web app's folder unchanged.
 ( cd /app && exec /app/llama-server -m /models/model.gguf --mmproj /models/mmproj.gguf \
     --host 127.0.0.1 --port 8080 \
-    -c "${LLAMA_CTX:-8192}" -t "${LLAMA_THREADS:-1}" -np 1 ${LLAMA_EXTRA_ARGS:-} ) &
+    -c "${LLAMA_CTX:-4096}" -t "${LLAMA_THREADS:-1}" -np 1 ${LLAMA_EXTRA_ARGS:-} ) &
 LLAMA_PID=$!
 
 export LLM_MODEL="$(cat /models/name.txt 2>/dev/null || echo model)"
@@ -40,9 +40,31 @@ export LLM_MODEL="$(cat /models/name.txt 2>/dev/null || echo model)"
 /usr/local/bin/vision-snapshot &
 APP_PID=$!
 
-trap 'kill "$LLAMA_PID" "$APP_PID" 2>/dev/null' TERM INT
-wait -n "$LLAMA_PID" "$APP_PID"
+STOP_SIGNAL=
+trap 'STOP_SIGNAL=TERM' TERM
+trap 'STOP_SIGNAL=INT' INT
+
+EXITED_PID=
+wait -n -p EXITED_PID "$LLAMA_PID" "$APP_PID"
 code=$?
-echo "A process exited (code $code). Stopping container."
-kill "$LLAMA_PID" "$APP_PID" 2>/dev/null
+if [ -n "$STOP_SIGNAL" ]; then
+  echo "Received SIG$STOP_SIGNAL; stopping child processes."
+  kill -TERM "$LLAMA_PID" "$APP_PID" 2>/dev/null || :
+  wait "$LLAMA_PID" 2>/dev/null || :
+  wait "$APP_PID" 2>/dev/null || :
+  if [ "$STOP_SIGNAL" = TERM ]; then exit 143; fi
+  exit 130
+fi
+
+if [ "$EXITED_PID" = "$LLAMA_PID" ]; then
+  echo "ERROR: llama-server exited with code $code. Stopping the web app."
+elif [ "$EXITED_PID" = "$APP_PID" ]; then
+  echo "ERROR: Vision Snapshot exited with code $code. Stopping llama-server."
+else
+  echo "ERROR: A child process exited with code $code. Stopping the container."
+fi
+
+kill -TERM "$LLAMA_PID" "$APP_PID" 2>/dev/null || :
+wait "$LLAMA_PID" 2>/dev/null || :
+wait "$APP_PID" 2>/dev/null || :
 exit "$code"

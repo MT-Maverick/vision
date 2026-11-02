@@ -10,10 +10,9 @@
   const HOLD_MS = 30000;       // after a hit, wait for a scene change or this long before triggering again
 
   const el = Object.fromEntries(
-    ["stage","video","still","empty","emptyMsg","retry","dot","conn","pill","result","sources","meta","shutter",
+    ["stage","video","still","empty","emptyMsg","retry","dot","conn","pill","result","meta","shutter",
      "flip","watch","loc","place","speak","card","ask","askBtn","useLast","file","history","model","opts","optsBtn","tPerson","tLandmark"].map((k) => [k, $(k)]));
   const opts = { mode: "identify", frames: 1 };
-  const skills = { web: true, detail: false, text: false };
   const targets = { person: true, landmark: true };
 
   let ws, stream, facing = "environment", busy = false, pending = null, nextId = 1, retries = 0;
@@ -156,6 +155,8 @@
     el.sources.replaceChildren(...links);
     el.sources.hidden = links.length === 0;
     el.meta.textContent = meta;
+    el.sources.replaceChildren();
+    el.sources.hidden = true;
     el.card.hidden = !!kind || !shown;
     el.useLast.hidden = !shown;
   }
@@ -165,7 +166,7 @@
     el.stage.classList.toggle("looking", busy || scouting);
   }
 
-  async function send(images, thumb, question = "") {
+  async function send(images, thumb, question = "", photoContext = "") {
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       show("Not connected to the server yet. Try again in a moment.", "error");
       setBusy(false);
@@ -175,7 +176,7 @@
     const place = el.place.value.trim();
     const location = !place && locOn ? await getLoc() : null;
     pending = { id: nextId++, thumb, frame: images[0], question, mode: question ? "ask" : opts.mode, gps: location ? location.accuracy : null };
-    ws.send(JSON.stringify({ id: pending.id, mode: pending.mode, question, images, location, place, skills }));
+    ws.send(JSON.stringify({ id: pending.id, mode: pending.mode, question, images, location, place }));
   }
 
   async function captureFrames() {
@@ -201,9 +202,12 @@
     const question = el.ask.value.trim();
     if (!question || busy) return;
     window.speechSynthesis?.cancel();
+    const useLastPhoto = el.useLast.getAttribute("aria-pressed") === "true" && shown?.frame;
     let images, thumb;
-    if (el.useLast.getAttribute("aria-pressed") === "true" && shown?.frame) {
+    let photoContext = "";
+    if (useLastPhoto) {
       images = [shown.frame]; thumb = shown.thumb;
+      photoContext = shown.label;
     } else if (!el.still.hidden) {
       images = [el.still.src]; thumb = el.still.src;
     } else if (!cameraLive()) {
@@ -213,7 +217,7 @@
     setBusy(true);
     if (!images) ({ images, thumb } = await captureFrames());
     el.ask.value = "";
-    send(images, thumb, question);
+    send(images, thumb, question, photoContext);
   }
 
   function finish(m) {
@@ -225,9 +229,8 @@
       const acc = p.gps != null ? `±${fmtDist(p.gps)}` : "";
       const base = [m.location_name, acc, when].filter(Boolean).join(" · ");
       const meta = p.question ? `Q: ${p.question} · ${base}` : base;
-      const sources = Array.isArray(m.sources) ? m.sources : [];
-      shown = { thumb: p.thumb, frame: p.frame, label: m.label, meta, base, sources };
-      show(m.label, "", meta, sources);
+      shown = { thumb: p.thumb, frame: p.frame, label: m.label, meta, base };
+      show(m.label, "", meta);
       history.unshift(shown);
       speak(m.label, p.mode);
       history.length = Math.min(history.length, MAX_HISTORY);
@@ -236,6 +239,25 @@
       show(m.label || "Something went wrong", "error");
     }
     setPill(watchOn ? "Watching…" : "");
+  }
+
+  function renderSources(sources) {
+    const links = sources.flatMap((source, i) => {
+      try {
+        const url = new URL(source.url);
+        if (url.protocol !== "https:" && url.protocol !== "http:") return [];
+        const link = document.createElement("a");
+        link.href = url.href;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.textContent = `[${i + 1}] ${source.title}`;
+        return [link];
+      } catch {
+        return [];
+      }
+    });
+    el.sources.replaceChildren(...links);
+    el.sources.hidden = !links.length;
   }
 
   /* ---------- watch mode: scout cheaply, analyze only when something is there ---------- */
@@ -363,7 +385,7 @@
       b.append(img);
       b.setAttribute("aria-label", `Show result: ${h.label}`);
       if (i === active) b.setAttribute("aria-current", "true");
-      b.onclick = () => { shown = h; show(h.label, "", h.meta, h.sources || []); renderHistory(i); };
+      b.onclick = () => { shown = h; show(h.label, "", h.meta); renderHistory(i); };
       li.append(b);
       return li;
     }));
@@ -375,19 +397,6 @@
     opts[g] = g === "frames" ? Number(b.dataset.value) : b.dataset.value;
     document.querySelectorAll(`[data-group="${g}"]`).forEach((x) => x.setAttribute("aria-pressed", x === b));
   }));
-  document.querySelectorAll(".skills button[data-skill]").forEach((b) => {
-    const skill = b.dataset.skill;
-    try {
-      const saved = JSON.parse(localStorage.getItem("skills") || "{}");
-      if (typeof saved[skill] === "boolean") skills[skill] = saved[skill];
-    } catch {}
-    b.setAttribute("aria-pressed", skills[skill]);
-    b.onclick = () => {
-      skills[skill] = !skills[skill];
-      b.setAttribute("aria-pressed", skills[skill]);
-      try { localStorage.setItem("skills", JSON.stringify(skills)); } catch {}
-    };
-  });
   [["tPerson", "person"], ["tLandmark", "landmark"]].forEach(([id, k]) => {
     el[id].onclick = () => { targets[k] = !targets[k]; el[id].setAttribute("aria-pressed", targets[k]); };
   });
