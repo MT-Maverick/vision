@@ -29,8 +29,7 @@ fi
 
 echo "Starting the model server (threads=${LLAMA_THREADS:-1}, context=${LLAMA_CTX:-4096}) ..."
 # Run from /app like the official image does; the subshell keeps the web app's folder unchanged.
-( cd /app && exec /app/llama-server -m /models/model.gguf --mmproj /models/mmproj.gguf \
-    --host 127.0.0.1 --port 8080 \
+( cd /app && exec /app/llama-server -m /models/model.gguf --mmproj /models/mmproj.gguf 
     -c "${LLAMA_CTX:-4096}" -t "${LLAMA_THREADS:-1}" -np 1 ${LLAMA_EXTRA_ARGS:-} ) &
 LLAMA_PID=$!
 
