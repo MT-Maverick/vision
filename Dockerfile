@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certifi
 # Pick the model with --build-arg PRESET=fast|balanced (default: balanced).
 #   fast      SmolVLM-500M, about 0.55 GB. Quickest, but short and shallow answers.
 #   balanced  Qwen3-VL-2B (4-bit), about 1.55 GB. Follows instructions much better; slower and needs more memory.
-ARG PRESET=fast
+ARG PRESET=balanced
 WORKDIR /models
 RUN case "$PRESET" in \
       fast)     REPO=ggml-org/SmolVLM-500M-Instruct-GGUF; LM=SmolVLM-500M-Instruct-Q8_0.gguf; PROJ=mmproj-SmolVLM-500M-Instruct-Q8_0.gguf; NAME=SmolVLM-500M ;; \
