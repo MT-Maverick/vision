@@ -310,7 +310,10 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                     &skills,
                     photo_context.as_deref(),
                 );
-                ask_model(&state, &prompt, &frames, mode, request_id, "vision", &skills).await
+                ask_model(
+                    &state, &prompt, &frames, mode, request_id, "vision", &skills,
+                )
+                .await
             }
             Err(error) => Err(format!("Inference is unavailable: {error}")),
         };
@@ -1102,7 +1105,16 @@ async fn ask_model_with_slot(
         .acquire_owned()
         .await
         .map_err(|error| format!("Inference is unavailable: {error}"))?;
-    ask_model(state, prompt, frames, mode, NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed), "vision", &[]).await
+    ask_model(
+        state,
+        prompt,
+        frames,
+        mode,
+        NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed),
+        "vision",
+        &[],
+    )
+    .await
 }
 
 async fn wikimedia_references(
@@ -1203,7 +1215,17 @@ async fn run_scout(socket: &mut WebSocket, state: &AppState, message: &Value) {
         descriptions.join("; "),
         options.join(", ")
     );
-    match ask_model(state, &prompt, &frames[..1], "scout", request_id, "watch-scout", &[]).await {
+    match ask_model(
+        state,
+        &prompt,
+        &frames[..1],
+        "scout",
+        request_id,
+        "watch-scout",
+        &[],
+    )
+    .await
+    {
         Ok(text) => {
             let upper = text.to_uppercase();
             let hit = options
