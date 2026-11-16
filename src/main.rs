@@ -317,7 +317,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
         match result {
             Ok(label) => {
                 println!(
-                    "request={request_id} completed status=success elapsed_ms={} sources={}",
+                    "request={request_id} completed status=success elapsed_ms={}",
                     request_started.elapsed().as_millis(),
                 );
                 let extra = json!({
