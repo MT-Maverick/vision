@@ -31,6 +31,15 @@ use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
 
 const MAX_FRAMES: usize = 6;
 const MAX_FRAME_BYTES: usize = 4_000_000;
+const MAX_WEB_EXTRACT_CHARS: usize = 1_200;
+const MAX_WEB_RESULTS: usize = 3;
+static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Clone, Copy, Default)]
+struct PromptSkills {
+    detailed: bool,
+    read_text: bool,
+}
 
 #[derive(Clone)]
 struct Config {
@@ -245,6 +254,19 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
             "identify"
         };
         let question = clean_text(message.get("question"), 300);
+        let skills: Vec<String> = message
+            .get("skills")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .filter(|skill| matches!(*skill, "explain" | "ocr" | "translate" | "web_search"))
+            .map(ToOwned::to_owned)
+            .collect();
+        let photo_context = message
+            .get("photo_context")
+            .and_then(Value::as_str)
+            .map(|value| value.chars().take(300).collect::<String>());
         if mode == "ask" && question.is_empty() {
             eprintln!("request={request_id} rejected mode=ask reason=empty_question");
             send_reply(&mut socket, &id, "error", "Type a question first", None).await;
@@ -280,8 +302,15 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
 
         let result = match state.api_slots.clone().acquire_owned().await {
             Ok(_permit) => {
-                let prompt = build_prompt(mode, frames.len(), place.as_deref(), &question);
-                ask_model(&state, &prompt, &frames, mode).await
+                let prompt = build_prompt(
+                    mode,
+                    frames.len(),
+                    place.as_deref(),
+                    &question,
+                    &skills,
+                    photo_context.as_deref(),
+                );
+                ask_model(&state, &prompt, &frames, mode, request_id, "vision", &skills).await
             }
             Err(error) => Err(format!("Inference is unavailable: {error}")),
         };
@@ -290,15 +319,12 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                 println!(
                     "request={request_id} completed status=success elapsed_ms={} sources={}",
                     request_started.elapsed().as_millis(),
-                    sources.len()
                 );
                 let extra = json!({
                     "location_name": place,
-                    "sources": sources,
                     "coords": coords.map(|(latitude, longitude)| {
                         json!({ "latitude": latitude, "longitude": longitude })
                     }),
-                    "sources": sources,
                 });
                 if !send_reply(&mut socket, &id, "success", &label, Some(extra)).await {
                     return;
@@ -417,7 +443,14 @@ const STYLE_TASKS: &[(&str, &str)] = &[
     ),
 ];
 
-fn build_prompt(mode: &str, frame_count: usize, place: Option<&str>, question: &str) -> String {
+fn build_prompt(
+    mode: &str,
+    frame_count: usize,
+    place: Option<&str>,
+    question: &str,
+    skills: &[String],
+    photo_context: Option<&str>,
+) -> String {
     let source = if frame_count > 1 {
         format!("These {frame_count} images are frames from one short camera clip, in order.")
     } else {
@@ -456,8 +489,8 @@ fn build_prompt(mode: &str, frame_count: usize, place: Option<&str>, question: &
     format!("{source}{where_taken} {task}")
 }
 
-fn max_tokens(mode: &str) -> u64 {
-    match mode {
+fn max_tokens(mode: &str, skills: &[String]) -> u64 {
+    let base = match mode {
         "ask" => 120,
         "identify" => 40,
         "describe" => 220,
@@ -530,7 +563,7 @@ fn wikimedia_page_url(value: &str) -> Option<String> {
         .then(|| url.to_string())
 }
 
-fn build_web_prompt(
+fn build_wikimedia_prompt(
     question: &str,
     local_answer: &str,
     references: &[WebReference],
@@ -582,6 +615,9 @@ async fn ask_model(
     prompt: &str,
     frames: &[String],
     mode: &str,
+    request_id: u64,
+    phase: &str,
+    skills: &[String],
 ) -> Result<String, String> {
     let mut content = vec![json!({ "type": "text", "text": prompt })];
     content.extend(frames.iter().map(|frame| {
@@ -1066,7 +1102,7 @@ async fn ask_model_with_slot(
         .acquire_owned()
         .await
         .map_err(|error| format!("Inference is unavailable: {error}"))?;
-    ask_model(state, prompt, frames, mode, skills).await
+    ask_model(state, prompt, frames, mode, NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed), "vision", &[]).await
 }
 
 async fn wikimedia_references(
@@ -1167,7 +1203,7 @@ async fn run_scout(socket: &mut WebSocket, state: &AppState, message: &Value) {
         descriptions.join("; "),
         options.join(", ")
     );
-    match ask_model(state, &prompt, &frames[..1], "scout").await {
+    match ask_model(state, &prompt, &frames[..1], "scout", request_id, "watch-scout", &[]).await {
         Ok(text) => {
             let upper = text.to_uppercase();
             let hit = options
@@ -1206,7 +1242,7 @@ mod tests {
 
     #[test]
     fn prompt_includes_clip_count_and_place() {
-        let prompt = build_prompt("identify", 4, Some("Cape Town"), "");
+        let prompt = build_prompt("identify", 4, Some("Cape Town"), "", &[], None);
         assert!(
             prompt.starts_with("These 4 images are frames from one short camera clip, in order.")
         );
