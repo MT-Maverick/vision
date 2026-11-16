@@ -11,7 +11,7 @@ on:
       preset:
         description: "Vision model preset to bake into the image"
         type: choice
-        options: [tiny, fast, balanced]
+        options: [fast, balanced]
         required: true
         default: tiny
 
