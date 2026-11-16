@@ -174,7 +174,7 @@
     const place = el.place.value.trim();
     const location = !place && locOn ? await getLoc() : null;
     pending = { id: nextId++, thumb, frame: images[0], question, mode: question ? "ask" : opts.mode, gps: location ? location.accuracy : null };
-    ws.send(JSON.stringify({ id: pending.id, mode: pending.mode, question, images, location, place }));
+    ws.send(JSON.stringify({ id: pending.id, mode: pending.mode, question, images, location, place, photo_context: photoContext }));
   }
 
   async function captureFrames() {
