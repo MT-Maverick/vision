@@ -13,11 +13,11 @@ on:
         type: choice
         options: [fast, balanced]
         required: true
-        default: tiny
+        default: balanced
 
 env:
   REGISTRY: ghcr.io
-  DEFAULT_PRESET: tiny
+  DEFAULT_PRESET: balanced
 
 permissions:
   contents: read
