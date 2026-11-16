@@ -155,8 +155,6 @@
     el.sources.replaceChildren(...links);
     el.sources.hidden = links.length === 0;
     el.meta.textContent = meta;
-    el.sources.replaceChildren();
-    el.sources.hidden = true;
     el.card.hidden = !!kind || !shown;
     el.useLast.hidden = !shown;
   }
@@ -230,7 +228,7 @@
       const base = [m.location_name, acc, when].filter(Boolean).join(" · ");
       const meta = p.question ? `Q: ${p.question} · ${base}` : base;
       shown = { thumb: p.thumb, frame: p.frame, label: m.label, meta, base };
-      show(m.label, "", meta);
+      show(m.label, "", meta, m.sources || []);
       history.unshift(shown);
       speak(m.label, p.mode);
       history.length = Math.min(history.length, MAX_HISTORY);
