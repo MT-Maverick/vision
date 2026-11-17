@@ -7,7 +7,7 @@ Vision Snapshot uses a local vision model served by [llama.cpp](https://github.c
 You need Docker. From the project directory, build and run the image:
 
 ```sh
-docker build -t vision-snapshot .
+docker build -t vision-snapshot . &&
 docker run --rm -p 10000:10000 vision-snapshot
 ```
 
