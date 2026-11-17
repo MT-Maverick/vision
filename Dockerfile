@@ -37,19 +37,20 @@ RUN apt-get update \
     && python3 -m venv /opt/venv
 
 WORKDIR /srv/app
-COPY requirements.txt .
-RUN pip install -r requirements.txt
+COPY python/requirements.txt ./python/requirements.txt
+RUN pip install -r python/requirements.txt
 
 COPY --from=models /models /models
 
-COPY main.py index.html start.sh healthcheck.py ./
+COPY python ./python
+COPY index.html start.sh ./
 COPY static ./static
 RUN chmod +x start.sh
 
 # Docker runs this every 30 s. It logs each result to `docker logs` and marks the container healthy/unhealthy.
 # The start period gives the model time to load before failures count.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=180s --retries=3 \
-  CMD ["python", "/srv/app/healthcheck.py"]
+  CMD ["python", "/srv/app/python/healthcheck.py"]
 
 EXPOSE 10000
 ENTRYPOINT ["/srv/app/start.sh"]

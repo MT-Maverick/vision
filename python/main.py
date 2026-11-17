@@ -25,7 +25,7 @@ except ImportError:
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s")
 log = logging.getLogger("vision")
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parent.parent
 # The model runs inside this container: llama.cpp's server, which speaks an OpenAI-compatible API.
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://127.0.0.1:8080/v1").rstrip("/")
 HEALTH_URL = os.getenv("LLM_HEALTH_URL", "http://127.0.0.1:8080/health")

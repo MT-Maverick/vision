@@ -3,6 +3,9 @@
 # If either stops, the container exits so Render restarts it.
 set -u
 export PORT="${PORT:-10000}"
+available_cpus=$(nproc)
+export LLAMA_THREADS="${LLAMA_THREADS:-$available_cpus}"
+export LLAMA_THREADS_BATCH="${LLAMA_THREADS_BATCH:-$available_cpus}"
 
 # Fail loudly if something is missing (for example if a folder was mounted over /app).
 for f in /app/llama-server /models/model.gguf /models/mmproj.gguf; do
@@ -27,17 +30,18 @@ if command -v ldd >/dev/null && ldd /app/llama-server 2>&1 | grep -q "not found"
   exit 1
 fi
 
-echo "Starting the model server (threads=${LLAMA_THREADS:-1}, context=${LLAMA_CTX:-4096}) ..."
+echo "Starting the model server (threads=$LLAMA_THREADS, batch_threads=$LLAMA_THREADS_BATCH, context=${LLAMA_CTX:-4096}) ..."
 # Run from /app like the official image does; the subshell keeps the web app's folder unchanged.
 ( cd /app && exec /app/llama-server -m /models/model.gguf --mmproj /models/mmproj.gguf \
     --host 127.0.0.1 --port 8080 \
-    -c "${LLAMA_CTX:-4096}" -t "${LLAMA_THREADS:-1}" -np 1 ${LLAMA_EXTRA_ARGS:-} ) &
+    -c "${LLAMA_CTX:-4096}" -t "$LLAMA_THREADS" -tb "$LLAMA_THREADS_BATCH" \
+    -np 1 ${LLAMA_EXTRA_ARGS:-} ) &
 LLAMA_PID=$!
 
 export LLM_MODEL="$(cat /models/name.txt 2>/dev/null || echo model)"
 
 # Web app starts straight away so Render sees the port open; it reports "loading" until the model is ready.
-uvicorn main:app --host 0.0.0.0 --port "$PORT" \
+uvicorn main:app --app-dir /srv/app/python --host 0.0.0.0 --port "$PORT" \
   --proxy-headers --forwarded-allow-ips='*' &
 APP_PID=$!
 

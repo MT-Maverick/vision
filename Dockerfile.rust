@@ -1,0 +1,45 @@
+ARG LLAMA_IMAGE=ghcr.io/ggml-org/llama.cpp:server
+
+FROM debian:stable-slim AS models
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+ARG PRESET=balanced
+WORKDIR /models
+RUN case "$PRESET" in \
+      fast)     REPO=ggml-org/SmolVLM-500M-Instruct-GGUF; LM=SmolVLM-500M-Instruct-Q8_0.gguf; PROJ=mmproj-SmolVLM-500M-Instruct-Q8_0.gguf; NAME=SmolVLM-500M ;; \
+      balanced) REPO=Qwen/Qwen3-VL-2B-Instruct-GGUF; LM=Qwen3VL-2B-Instruct-Q4_K_M.gguf; PROJ=mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf; NAME=Qwen3-VL-2B ;; \
+      *) echo "Unknown PRESET '$PRESET' (use fast or balanced)"; exit 1 ;; \
+    esac \
+ && curl -fL --retry 3 -o model.gguf  "https://huggingface.co/$REPO/resolve/main/$LM" \
+ && curl -fL --retry 3 -o mmproj.gguf "https://huggingface.co/$REPO/resolve/main/$PROJ" \
+ && echo "$NAME" > name.txt
+
+FROM rust:1-bookworm AS rust-build
+WORKDIR /build
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+RUN cargo build --release --locked
+
+FROM ${LLAMA_IMAGE}
+ENV DEBIAN_FRONTEND=noninteractive \
+    PORT=10000 \
+    MAX_DIM=512
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=models /models /models
+COPY --from=rust-build /build/target/release/vision-snapshot /usr/local/bin/vision-snapshot
+
+WORKDIR /srv/app
+COPY index.html start-rust.sh ./
+COPY static ./static
+RUN chmod +x start-rust.sh
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=180s --retries=3 \
+  CMD curl -fsS "http://127.0.0.1:${PORT:-10000}/healthz" >/dev/null && curl -fsS http://127.0.0.1:8080/health >/dev/null
+
+EXPOSE 10000
+ENTRYPOINT ["/srv/app/start-rust.sh"]
+CMD []
