@@ -36,9 +36,21 @@ docker build -t vision-snapshot .
 docker run --rm -p 10000:10000 vision-snapshot
 ```
 
-The default `balanced` preset downloads Qwen3-VL-2B and its vision projector during the build. The first build can take a few minutes. For higher throughput on limited CPU, build with the smaller SmolVLM-500M model instead (`--build-arg PRESET=fast`); it trades some answer quality for lower compute and memory use. Open [http://localhost:10000](http://localhost:10000) after the container starts.
+The default `fast` preset downloads SmolVLM-256M and its vision projector during the build. The first build can take a few minutes. For better answer quality, build with the larger Qwen3-VL-2B model instead (`--build-arg PRESET=balanced`); it needs more memory and compute. Open [http://localhost:10000](http://localhost:10000) after the container starts.
 
 Camera access works on `localhost` over HTTP. For other devices or hostnames, use HTTPS. If live camera access is unavailable, choose **Options** and take or select a photo.
+
+## Deploy to Render
+
+GitHub Actions builds and publishes the Docker image to GHCR. The Render Blueprint uses that prebuilt image, so Render pulls it instead of building the app and model from source. On pushes to `main`, the workflow triggers a Render deploy for the exact commit image after the image is published.
+
+To enable this:
+
+1. Make the `vision` package in GitHub Container Registry public, or configure a GHCR pull credential in Render and attach it to the service.
+2. Create or sync the service from `render.yaml` in Render.
+3. In the Render service settings, create a deploy hook. Add its URL as the `RENDER_DEPLOY_HOOK_URL` Actions secret in the GitHub repository (`Settings` → `Secrets and variables` → `Actions`).
+
+Without that secret the image still builds and publishes, but Render will not be triggered automatically. You can also deploy manually from Render.
 
 ## How it starts
 
@@ -56,8 +68,8 @@ The Docker image downloads a preset model and its matching projector at build ti
 
 | Preset | Model | Build command |
 | --- | --- | --- |
-| `balanced` (default) | Qwen3-VL-2B, larger and more capable | `docker build -t vision-snapshot .` |
-| `fast` | SmolVLM-500M, smaller and quicker | `docker build --build-arg PRESET=fast -t vision-snapshot .` |
+| `fast` (default) | SmolVLM-256M, smallest and quickest | `docker build -t vision-snapshot .` |
+| `balanced` | Qwen3-VL-2B, larger and more capable | `docker build --build-arg PRESET=balanced -t vision-snapshot .` |
 
 The preset also determines the model name the app shows. Changing `LLM_MODEL` at runtime only changes that label; it does not load a different model.
 
@@ -123,7 +135,7 @@ The app requires a positive whole number for `MAX_DIM`, `INFERENCE_TIMEOUT`, and
 
 | Setting | Default | Description |
 | --- | --- | --- |
-| `PRESET` | `balanced` | Docker build argument selecting the model files (`fast` or `balanced`). |
+| `PRESET` | `fast` | Docker build argument selecting the model files (`fast` or `balanced`). |
 | `LLAMA_IMAGE` | `ghcr.io/ggml-org/llama.cpp:server` | Docker build argument selecting the llama.cpp image. |
 | `LLAMA_CTX` | `4096` | Context size passed to llama.cpp. |
 | `LLAMA_THREADS` | CPUs available to the container | CPU threads used for generation. |

@@ -56,6 +56,7 @@ jobs:
             type=ref,event=pr
             type=semver,pattern={{version}}
             type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=long,prefix=sha-
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -69,3 +70,16 @@ jobs:
             PRESET=${{ inputs.preset || env.DEFAULT_PRESET }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Trigger Render deploy
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$RENDER_DEPLOY_HOOK_URL" ]; then
+            echo "::notice::Set the RENDER_DEPLOY_HOOK_URL Actions secret to trigger Render deployments."
+            exit 0
+          fi
+          curl --fail-with-body --silent --show-error --get \
+            --data-urlencode "imgURL=ghcr.io/mt-maverick/vision:sha-${GITHUB_SHA}" \
+            "$RENDER_DEPLOY_HOOK_URL"
