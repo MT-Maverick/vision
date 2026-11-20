@@ -20,38 +20,41 @@ RUN case "$PRESET" in \
  && curl -fL --retry 3 -o mmproj.gguf "https://huggingface.co/$REPO/resolve/main/$PROJ" \
  && echo "$NAME" > name.txt
 
-# Stage 2: llama.cpp's official CPU server image + our Python app
+# Stage 2: build the Rust web app
+FROM rust:1-bookworm AS rust-build
+WORKDIR /build
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+RUN cargo build --release --locked
+
+# Stage 3: llama.cpp's official CPU server image + the Rust app
 FROM ${LLAMA_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive \
-    PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PATH=/opt/venv/bin:$PATH \
-    MAX_DIM=512 \
-    PORT=10000
+    PORT=10000 \
+    MAX_DIM=512
 
+# curl is used by the launcher script to confirm the app can reach the model.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 python3-venv ca-certificates \
-    && rm -rf /var/lib/apt/lists/* \
-    && python3 -m venv /opt/venv
-
-WORKDIR /srv/app
-COPY python/requirements.txt ./python/requirements.txt
-RUN pip install -r python/requirements.txt
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY --from=models /models /models
+COPY --from=rust-build /build/target/release/vision-snapshot /usr/local/bin/vision-snapshot
 
-COPY python ./python
-COPY index.html start.sh ./
-COPY static ./static
-RUN chmod +x start.sh
+# The repo's own layout: scripts/start.sh finds the page in ../web.
+WORKDIR /srv/app
+COPY web ./web
+COPY scripts ./scripts
+# The binary was built on a different base image than this one. Running it once here makes a
+# mismatch (for example in the C library) fail the build, not the first start of the container.
+RUN chmod +x scripts/start.sh && vision-snapshot --version
 
 # Docker runs this every 30 s. It logs each result to `docker logs` and marks the container healthy/unhealthy.
 # The start period gives the model time to load before failures count.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=180s --retries=3 \
-  CMD ["python", "/srv/app/python/healthcheck.py"]
+  CMD ["vision-snapshot", "healthcheck"]
 
 EXPOSE 10000
-ENTRYPOINT ["/srv/app/start.sh"]
+ENTRYPOINT ["/srv/app/scripts/start.sh"]
 CMD []

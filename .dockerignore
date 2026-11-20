@@ -1,8 +1,5 @@
 .git
-.venv
-**/.venv
 target
 **/target
-__pycache__
-**/__pycache__
-*.py[cod]
+.github
+README.md
